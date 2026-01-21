@@ -1,135 +1,146 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
-import { useNexusStore } from '../stores/useNexusStore'
-import { NModal, NInput, NScrollbar } from 'naive-ui'
-import Fuse from 'fuse.js'
+import { ref, computed, watch, onMounted, onUnmounted } from "vue";
+import { useNexusStore } from "../stores/useNexusStore";
+import { useThemeStore } from "../stores/useThemeStore";
+import { NModal, NInput, NScrollbar } from "naive-ui";
+import Fuse from "fuse.js";
 
 interface SearchItem {
-  type: 'category' | 'file'
-  id: string
-  categoryId?: string
-  title: string
-  categoryName?: string
-  icon?: string
+  type: "category" | "file";
+  id: string;
+  categoryId?: string;
+  title: string;
+  categoryName?: string;
+  icon?: string;
 }
 
-const nexusStore = useNexusStore()
+const nexusStore = useNexusStore();
+const themeStore = useThemeStore();
 
-const show = ref(false)
-const searchQuery = ref('')
-const selectedIndex = ref(0)
-const inputRef = ref<InstanceType<typeof NInput> | null>(null)
+const show = ref(false);
+const searchQuery = ref("");
+const selectedIndex = ref(0);
+const inputRef = ref<InstanceType<typeof NInput> | null>(null);
 
 // 构建搜索列表
 const allItems = computed<SearchItem[]>(() => {
-  if (!nexusStore.index) return []
-  
-  const items: SearchItem[] = []
-  
+  if (!nexusStore.index) return [];
+
+  const items: SearchItem[] = [];
+
   for (const cat of nexusStore.index.categories) {
     // 添加分类
     items.push({
-      type: 'category',
+      type: "category",
       id: cat.id,
       title: cat.name,
-      icon: cat.icon
-    })
-    
+      icon: cat.icon,
+    });
+
     // 添加分类下的文件
     for (const file of cat.items) {
       items.push({
-        type: 'file',
+        type: "file",
         id: file.id,
         categoryId: cat.id,
         title: file.title,
-        categoryName: cat.name
-      })
+        categoryName: cat.name,
+      });
     }
   }
-  
-  return items
-})
+
+  return items;
+});
 
 // Fuse 搜索
-const fuse = computed(() => new Fuse(allItems.value, {
-  keys: ['title', 'categoryName'],
-  threshold: 0.4,
-  ignoreLocation: true
-}))
+const fuse = computed(
+  () =>
+    new Fuse(allItems.value, {
+      keys: ["title", "categoryName"],
+      threshold: 0.4,
+      ignoreLocation: true,
+    }),
+);
 
 const filteredItems = computed(() => {
-  if (!searchQuery.value) return allItems.value.slice(0, 10)
-  return fuse.value.search(searchQuery.value).slice(0, 10).map(r => r.item)
-})
+  if (!searchQuery.value) return allItems.value.slice(0, 10);
+  return fuse.value
+    .search(searchQuery.value)
+    .slice(0, 10)
+    .map((r) => r.item);
+});
 
 // 重置选择索引
 watch(filteredItems, () => {
-  selectedIndex.value = 0
-})
+  selectedIndex.value = 0;
+});
 
 // 打开搜索
 function openSearch() {
-  show.value = true
-  searchQuery.value = ''
-  selectedIndex.value = 0
+  show.value = true;
+  searchQuery.value = "";
+  selectedIndex.value = 0;
   // 聚焦输入框
   setTimeout(() => {
-    inputRef.value?.focus()
-  }, 100)
+    inputRef.value?.focus();
+  }, 100);
 }
 
 // 关闭
 function closeSearch() {
-  show.value = false
+  show.value = false;
 }
 
 // 选择项目
 function selectItem(item: SearchItem) {
-  if (item.type === 'category') {
-    nexusStore.selectedCategoryId = item.id
-    nexusStore.selectedFileId = null
+  if (item.type === "category") {
+    nexusStore.selectedCategoryId = item.id;
+    nexusStore.selectedFileId = null;
   } else {
-    nexusStore.selectedCategoryId = item.categoryId!
-    nexusStore.selectedFileId = item.id
+    nexusStore.selectedCategoryId = item.categoryId!;
+    nexusStore.selectedFileId = item.id;
   }
-  closeSearch()
+  closeSearch();
 }
 
 // 键盘导航
 function handleKeyDown(e: KeyboardEvent) {
-  if (e.key === 'ArrowDown') {
-    e.preventDefault()
-    selectedIndex.value = Math.min(selectedIndex.value + 1, filteredItems.value.length - 1)
-  } else if (e.key === 'ArrowUp') {
-    e.preventDefault()
-    selectedIndex.value = Math.max(selectedIndex.value - 1, 0)
-  } else if (e.key === 'Enter') {
-    e.preventDefault()
-    const item = filteredItems.value[selectedIndex.value]
-    if (item) selectItem(item)
-  } else if (e.key === 'Escape') {
-    closeSearch()
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    selectedIndex.value = Math.min(
+      selectedIndex.value + 1,
+      filteredItems.value.length - 1,
+    );
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    selectedIndex.value = Math.max(selectedIndex.value - 1, 0);
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    const item = filteredItems.value[selectedIndex.value];
+    if (item) selectItem(item);
+  } else if (e.key === "Escape") {
+    closeSearch();
   }
 }
 
 // 全局快捷键
 function handleGlobalKeyDown(e: KeyboardEvent) {
-  if ((e.ctrlKey || e.metaKey) && e.key === 'p') {
-    e.preventDefault()
-    openSearch()
+  if ((e.ctrlKey || e.metaKey) && e.key === "p") {
+    e.preventDefault();
+    openSearch();
   }
 }
 
 onMounted(() => {
-  window.addEventListener('keydown', handleGlobalKeyDown)
-})
+  window.addEventListener("keydown", handleGlobalKeyDown);
+});
 
 onUnmounted(() => {
-  window.removeEventListener('keydown', handleGlobalKeyDown)
-})
+  window.removeEventListener("keydown", handleGlobalKeyDown);
+});
 
 // 暴露方法供外部调用
-defineExpose({ openSearch })
+defineExpose({ openSearch });
 </script>
 
 <template>
@@ -139,7 +150,7 @@ defineExpose({ openSearch })
     :bordered="false"
     :closable="false"
     size="small"
-    style="width: 500px; max-width: 90vw;"
+    style="width: 500px; max-width: 90vw"
     class="global-search-modal"
     :mask-closable="true"
     @keydown="handleKeyDown"
@@ -154,10 +165,12 @@ defineExpose({ openSearch })
         clearable
       >
         <template #prefix>
-          <div class="i-heroicons-magnifying-glass w-5 h-5 text-slate-400"></div>
+          <div
+            class="i-heroicons-magnifying-glass w-5 h-5 text-slate-400"
+          ></div>
         </template>
       </NInput>
-      
+
       <!-- 搜索结果 -->
       <NScrollbar style="max-height: 320px">
         <div class="space-y-1">
@@ -166,41 +179,90 @@ defineExpose({ openSearch })
             :key="`${item.type}-${item.id}`"
             class="px-3 py-2.5 rounded-md cursor-pointer transition-all duration-150"
             :class="[
-              selectedIndex === index 
-                ? 'bg-blue-500/20 text-blue-400' 
-                : 'hover:bg-slate-700/50'
+              selectedIndex === index
+                ? 'bg-blue-500/20 text-blue-500'
+                : themeStore.isDark
+                  ? 'hover:bg-slate-700/50'
+                  : 'hover:bg-slate-100',
             ]"
             @click="selectItem(item)"
             @mouseenter="selectedIndex = index"
           >
             <div class="flex items-center">
-              <div 
+              <div
                 class="w-5 h-5 mr-3"
-                :class="item.type === 'category' ? 'i-heroicons-folder' : 'i-heroicons-document-text'"
+                :class="[
+                  item.type === 'category'
+                    ? 'i-heroicons-folder'
+                    : 'i-heroicons-document-text',
+                  themeStore.isDark ? 'text-slate-400' : 'text-slate-500',
+                ]"
               ></div>
               <div class="flex-1 min-w-0">
-                <div class="font-medium truncate">{{ item.title }}</div>
-                <div v-if="item.categoryName" class="text-xs text-slate-500 truncate">
+                <div
+                  class="font-medium truncate"
+                  :class="
+                    themeStore.isDark ? 'text-slate-200' : 'text-slate-700'
+                  "
+                >
+                  {{ item.title }}
+                </div>
+                <div
+                  v-if="item.categoryName"
+                  class="text-xs truncate"
+                  :class="
+                    themeStore.isDark ? 'text-slate-500' : 'text-slate-400'
+                  "
+                >
                   {{ item.categoryName }}
                 </div>
               </div>
-              <div class="text-xs text-slate-500 ml-2">
-                {{ item.type === 'category' ? '分类' : '配置' }}
+              <div
+                class="text-xs ml-2"
+                :class="themeStore.isDark ? 'text-slate-500' : 'text-slate-400'"
+              >
+                {{ item.type === "category" ? "分类" : "配置" }}
               </div>
             </div>
           </div>
-          
-          <div v-if="filteredItems.length === 0" class="py-8 text-center text-slate-500">
+
+          <div
+            v-if="filteredItems.length === 0"
+            class="py-8 text-center"
+            :class="themeStore.isDark ? 'text-slate-500' : 'text-slate-400'"
+          >
             未找到匹配项
           </div>
         </div>
       </NScrollbar>
-      
+
       <!-- 快捷键提示 -->
-      <div class="flex items-center justify-center text-xs text-slate-500 pt-2 border-t border-slate-700">
-        <span class="px-1.5 py-0.5 rounded bg-slate-700 mr-1">↑↓</span> 导航
-        <span class="px-1.5 py-0.5 rounded bg-slate-700 mx-2">Enter</span> 选择
-        <span class="px-1.5 py-0.5 rounded bg-slate-700 ml-1">Esc</span> 关闭
+      <div
+        class="flex items-center justify-center text-xs pt-2 border-t"
+        :class="
+          themeStore.isDark
+            ? 'text-slate-500 border-slate-700'
+            : 'text-slate-400 border-slate-200'
+        "
+      >
+        <span
+          class="px-1.5 py-0.5 rounded mr-1"
+          :class="themeStore.isDark ? 'bg-slate-700' : 'bg-slate-200'"
+          >↑↓</span
+        >
+        导航
+        <span
+          class="px-1.5 py-0.5 rounded mx-2"
+          :class="themeStore.isDark ? 'bg-slate-700' : 'bg-slate-200'"
+          >Enter</span
+        >
+        选择
+        <span
+          class="px-1.5 py-0.5 rounded ml-1"
+          :class="themeStore.isDark ? 'bg-slate-700' : 'bg-slate-200'"
+          >Esc</span
+        >
+        关闭
       </div>
     </div>
   </NModal>
@@ -208,7 +270,6 @@ defineExpose({ openSearch })
 
 <style>
 .global-search-modal .n-card {
-  background: rgba(30, 41, 59, 0.95) !important;
   backdrop-filter: blur(12px);
 }
 </style>
