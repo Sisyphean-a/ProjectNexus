@@ -3,12 +3,36 @@ import { ref, computed, watch } from "vue";
 import { useNexusStore } from "../../stores/useNexusStore";
 import { useThemeStore } from "../../stores/useThemeStore";
 import { gistRepository } from "../../infrastructure";
-import { NButton, NSwitch, NSelect, useMessage } from "naive-ui";
+import {
+  NButton,
+  NSwitch,
+  NSelect,
+  NTooltip,
+  NButtonGroup,
+  useMessage,
+} from "naive-ui";
 import { VueMonacoEditor } from "@guolao/vue-monaco-editor";
+
+const emit = defineEmits<{
+  "open-search": [];
+}>();
 
 const nexusStore = useNexusStore();
 const themeStore = useThemeStore();
 const message = useMessage();
+
+// 主题图标
+function getThemeIcon() {
+  if (themeStore.mode === "dark") return "i-heroicons-moon";
+  if (themeStore.mode === "light") return "i-heroicons-sun";
+  return "i-heroicons-computer-desktop";
+}
+
+function getThemeLabel() {
+  if (themeStore.mode === "dark") return "深色";
+  if (themeStore.mode === "light") return "浅色";
+  return "自动";
+}
 
 // 编辑器状态
 const code = ref("");
@@ -160,44 +184,95 @@ function handleKeyDown(e: KeyboardEvent) {
         />
       </div>
 
-      <div class="flex items-center space-x-3">
+      <div class="flex items-center gap-2">
         <!-- 只读模式切换 -->
         <div
           v-if="selectedFile"
-          class="flex items-center space-x-2 text-xs"
+          class="flex items-center space-x-2 text-xs px-2"
           :class="themeStore.isDark ? 'text-slate-400' : 'text-slate-500'"
         >
           <span>只读</span>
           <NSwitch v-model:value="isReadOnly" size="small" />
         </div>
 
-        <!-- 复制按钮 -->
-        <NButton
+        <!-- 分隔符 -->
+        <div
           v-if="selectedFile"
-          size="small"
-          type="info"
-          ghost
-          @click="handleCopyAll"
-        >
-          <template #icon>
-            <div class="i-heroicons-clipboard-document w-4 h-4"></div>
-          </template>
-          复制全部
-        </NButton>
+          class="h-5 w-px"
+          :class="themeStore.isDark ? 'bg-slate-600' : 'bg-slate-300'"
+        ></div>
 
-        <!-- 保存按钮 -->
-        <NButton
-          v-if="selectedFile"
-          size="small"
-          type="primary"
-          :disabled="!isDirty || isReadOnly"
-          @click="handleSave"
-        >
-          <template #icon>
-            <div class="i-heroicons-cloud-arrow-up w-4 h-4"></div>
-          </template>
-          保存
-        </NButton>
+        <!-- 文件操作按钮组 -->
+        <NButtonGroup v-if="selectedFile" size="small">
+          <NTooltip trigger="hover">
+            <template #trigger>
+              <NButton
+                :quaternary="themeStore.isDark"
+                :tertiary="!themeStore.isDark"
+                @click="handleCopyAll"
+              >
+                <template #icon>
+                  <div class="i-heroicons-clipboard-document w-4 h-4"></div>
+                </template>
+              </NButton>
+            </template>
+            复制全部
+          </NTooltip>
+
+          <NTooltip trigger="hover">
+            <template #trigger>
+              <NButton
+                type="primary"
+                :disabled="!isDirty || isReadOnly"
+                @click="handleSave"
+              >
+                <template #icon>
+                  <div class="i-heroicons-cloud-arrow-up w-4 h-4"></div>
+                </template>
+              </NButton>
+            </template>
+            保存 (Ctrl+S)
+          </NTooltip>
+        </NButtonGroup>
+
+        <!-- 分隔符 -->
+        <div
+          class="h-5 w-px"
+          :class="themeStore.isDark ? 'bg-slate-600' : 'bg-slate-300'"
+        ></div>
+
+        <!-- 全局操作按钮组 -->
+        <NButtonGroup size="small">
+          <NTooltip trigger="hover">
+            <template #trigger>
+              <NButton
+                :quaternary="themeStore.isDark"
+                :tertiary="!themeStore.isDark"
+                @click="emit('open-search')"
+              >
+                <template #icon>
+                  <div class="i-heroicons-magnifying-glass w-4 h-4"></div>
+                </template>
+              </NButton>
+            </template>
+            搜索 (Ctrl+P)
+          </NTooltip>
+
+          <NTooltip trigger="hover">
+            <template #trigger>
+              <NButton
+                :quaternary="themeStore.isDark"
+                :tertiary="!themeStore.isDark"
+                @click="themeStore.toggleTheme()"
+              >
+                <template #icon>
+                  <div :class="`${getThemeIcon()} w-4 h-4`"></div>
+                </template>
+              </NButton>
+            </template>
+            {{ getThemeLabel() }}模式 (点击切换)
+          </NTooltip>
+        </NButtonGroup>
       </div>
     </div>
 
