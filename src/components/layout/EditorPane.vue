@@ -1,160 +1,219 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useNexusStore } from '../../stores/useNexusStore'
 import { gistRepository } from '../../infrastructure'
-import { NButton, useMessage } from 'naive-ui'
+import { NButton, NSwitch, NSelect, useMessage } from 'naive-ui'
 import { VueMonacoEditor } from '@guolao/vue-monaco-editor'
 
 const nexusStore = useNexusStore()
 const message = useMessage()
 
-// Editor state
+// 编辑器状态
 const code = ref('')
 const language = ref('yaml')
 const isDirty = ref(false)
 const isLoadingContent = ref(false)
+const isReadOnly = ref(false)
 
-// Determine which file is selected
+// 语言选项
+const languageOptions = [
+  { label: 'YAML', value: 'yaml' },
+  { label: 'JSON', value: 'json' },
+  { label: 'Markdown', value: 'markdown' },
+  { label: 'JavaScript', value: 'javascript' },
+  { label: 'TypeScript', value: 'typescript' },
+  { label: 'Python', value: 'python' },
+  { label: '纯文本', value: 'plaintext' }
+]
+
+// 选中的文件
 const selectedFile = computed(() => {
-    if (!nexusStore.selectedFileId) return null
-    return nexusStore.currentFileList.find(f => f.id === nexusStore.selectedFileId) || null
+  if (!nexusStore.selectedFileId) return null
+  return nexusStore.currentFileList.find(f => f.id === nexusStore.selectedFileId) || null
 })
 
-// Watch selection change to load content
-watch(() =>nexusStore.selectedFileId, async (newId) => {
-    if (!newId || !nexusStore.currentGistId) {
-        code.value = ''
-        return
-    }
+// 监听选择变化并加载内容
+watch(() => nexusStore.selectedFileId, async (newId) => {
+  if (!newId || !nexusStore.currentGistId) {
+    code.value = ''
+    return
+  }
+
+  isLoadingContent.value = true
+  try {
+    const files = await gistRepository.getGistContent(nexusStore.currentGistId)
+    const file = files[selectedFile.value?.gist_file || '']
     
-    // Check if we have cached content? 
-    // Domain logic: GistRepository.getGistContent fetches ALL files.
-    // So if synced, we likely have it. But we didn't store file CONTENT in Index. 
-    // Store only has Index.
-    // We need to fetch file content on demand or pre-fetch?
-    // Architecture said: "Click specific item -> Get content".
-    // So we fetch now.
-    
-    isLoadingContent.value = true
-    try {
-        // Optimization: Cache content in a store or LocalStore cache?
-        // For now, simpler: Fetch from Gist (or LocalStore cache if implemented).
-        // Let's implement a simple fetch from GistRepository.getGistContent (returns all).
-        // This is inefficient (fetches all files). 
-        // Gist API allows fetching single file raw content? 
-        // Octokit 'get' fetches metadata which includes content if small.
-        
-        // Better: use LocalStore cache for content.
-        // But for MVP phase 2/3, getting from Gist is safer source of truth.
-        // We will cache it in memory `code` ref for now.
-        
-        const files = await gistRepository.getGistContent(nexusStore.currentGistId)
-        const file = files[selectedFile.value?.gist_file || '']
-        
-        if (file) {
-            code.value = file.content
-            // Auto-detect language from extension
-            const ext = file.filename.split('.').pop()
-            if (ext === 'md') language.value = 'markdown'
-            else if (ext === 'json') language.value = 'json'
-            else if (ext === 'js' || ext === 'ts') language.value = 'javascript'
-            else language.value = 'yaml'
-            
-            isDirty.value = false
-        } else {
-            code.value = '# Error loading content'
-        }
-    } catch (e) {
-        console.error(e)
-        message.error('Failed to load file content')
-    } finally {
-        isLoadingContent.value = false
+    if (file) {
+      code.value = file.content
+      // 自动检测语言
+      const ext = file.filename.split('.').pop()
+      if (ext === 'md') language.value = 'markdown'
+      else if (ext === 'json') language.value = 'json'
+      else if (ext === 'js') language.value = 'javascript'
+      else if (ext === 'ts') language.value = 'typescript'
+      else if (ext === 'py') language.value = 'python'
+      else language.value = 'yaml'
+      
+      isDirty.value = false
+    } else {
+      code.value = ''
     }
+  } catch (e) {
+    console.error(e)
+    message.error('加载内容失败')
+  } finally {
+    isLoadingContent.value = false
+  }
 })
 
+// 保存
 async function handleSave() {
-    if (!selectedFile.value || !nexusStore.currentGistId) return
-    
-    // Optimistic UI?
-    const savingMessage = message.loading('Saving...', { duration: 0 })
-    try {
-        await gistRepository.updateGistFile(nexusStore.currentGistId, selectedFile.value.gist_file, code.value)
-        isDirty.value = false
-        savingMessage.destroy()
-        message.success('Saved')
-    } catch (e) {
-        savingMessage.destroy()
-        message.error('Failed to save')
-        console.error(e)
-    }
+  if (!selectedFile.value || !nexusStore.currentGistId) return
+  
+  const savingMessage = message.loading('保存中...', { duration: 0 })
+  try {
+    await gistRepository.updateGistFile(nexusStore.currentGistId, selectedFile.value.gist_file, code.value)
+    isDirty.value = false
+    savingMessage.destroy()
+    message.success('已保存')
+  } catch (e) {
+    savingMessage.destroy()
+    message.error('保存失败')
+    console.error(e)
+  }
 }
 
-// Shortcuts
+// 复制全部
+async function handleCopyAll() {
+  try {
+    await navigator.clipboard.writeText(code.value)
+    message.success('已复制到剪贴板')
+  } catch (e) {
+    message.error('复制失败')
+  }
+}
+
+// 快捷键
 function handleKeyDown(e: KeyboardEvent) {
-    if ((e.ctrlKey || e.metaKey) && e.key === 's') {
-        e.preventDefault()
-        handleSave()
+  if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+    e.preventDefault()
+    if (!isReadOnly.value) {
+      handleSave()
     }
+  }
 }
-
 </script>
 
 <template>
   <div class="h-full flex flex-col relative" @keydown="handleKeyDown">
-    <!-- Header -->
+    <!-- 头部工具栏 -->
     <div class="h-12 border-b border-slate-800 bg-slate-900 flex items-center px-4 justify-between">
-        <div class="flex items-center space-x-2 overflow-hidden">
-            <div class="i-heroicons-document-text text-slate-500"></div>
-            <span class="font-mono text-sm truncate max-w-[200px]" :class="isDirty ? 'italic text-yellow-500' : 'text-slate-300'">
-                {{ selectedFile ? selectedFile.title : 'No file selected' }}
-                <span v-if="isDirty">*</span>
-            </span>
+      <div class="flex items-center space-x-3 overflow-hidden">
+        <div class="i-heroicons-document-text text-slate-500"></div>
+        <span 
+          class="font-mono text-sm truncate max-w-[200px]" 
+          :class="isDirty ? 'italic text-yellow-500' : 'text-slate-300'"
+        >
+          {{ selectedFile ? selectedFile.title : '未选择文件' }}
+          <span v-if="isDirty">*</span>
+        </span>
+        
+        <!-- 语言选择 -->
+        <NSelect
+          v-if="selectedFile"
+          v-model:value="language"
+          :options="languageOptions"
+          size="tiny"
+          style="width: 120px"
+        />
+      </div>
+      
+      <div class="flex items-center space-x-3">
+        <!-- 只读模式切换 -->
+        <div v-if="selectedFile" class="flex items-center space-x-2 text-xs text-slate-400">
+          <span>只读</span>
+          <NSwitch v-model:value="isReadOnly" size="small" />
         </div>
         
-        <div class="flex items-center space-x-2">
-            <NButton 
-                v-if="selectedFile" 
-                size="tiny" 
-                secondary 
-                type="primary" 
-                :disabled="!isDirty"
-                @click="handleSave"
-            >
-                Save
-            </NButton>
-        </div>
+        <!-- 复制按钮 -->
+        <NButton 
+          v-if="selectedFile" 
+          size="small" 
+          type="info"
+          ghost
+          @click="handleCopyAll"
+        >
+          <template #icon>
+            <div class="i-heroicons-clipboard-document w-4 h-4"></div>
+          </template>
+          复制全部
+        </NButton>
+        
+        <!-- 保存按钮 -->
+        <NButton 
+          v-if="selectedFile" 
+          size="small" 
+          type="primary" 
+          :disabled="!isDirty || isReadOnly"
+          @click="handleSave"
+        >
+          <template #icon>
+            <div class="i-heroicons-cloud-arrow-up w-4 h-4"></div>
+          </template>
+          保存
+        </NButton>
+      </div>
     </div>
 
-    <!-- Editor -->
-    <div class="flex-1 relative overflow-hidden bg-[#1e1e1e]"> <!-- Monaco Dark BG match -->
-        <div v-if="!selectedFile" class="absolute inset-0 flex items-center justify-center text-slate-600">
-            <div class="text-center">
-                <div class="i-heroicons-code-bracket-square w-12 h-12 mx-auto mb-2 opacity-20"></div>
-                <p>Select a file to edit</p>
-            </div>
+    <!-- 编辑器 -->
+    <div class="flex-1 relative overflow-hidden bg-[#1e1e1e]">
+      <div v-if="!selectedFile" class="absolute inset-0 flex items-center justify-center text-slate-600">
+        <div class="text-center">
+          <div class="i-heroicons-code-bracket-square w-16 h-16 mx-auto mb-4 opacity-20"></div>
+          <p class="text-lg">选择一个文件开始编辑</p>
+          <p class="text-sm text-slate-500 mt-2">在左侧列表选择配置文件</p>
         </div>
-        
-        <VueMonacoEditor 
-            v-else
-            v-model:value="code"
-            :language="language"
-            theme="vs-dark"
-            :options="{
-                automaticLayout: true,
-                fontSize: 14,
-                fontFamily: 'Fira Code, monospace',
-                minimap: { enabled: false },
-                scrollBeyondLastLine: false,
-                padding: { top: 16 }
-            }"
-            @change="isDirty = true"
-            class="h-full w-full"
-        />
-        
-         <!-- Loading Overlay -->
-        <div v-if="isLoadingContent" class="absolute inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-10">
-            <div class="i-heroicons-arrow-path animate-spin w-8 h-8 text-blue-500"></div>
+      </div>
+      
+      <VueMonacoEditor 
+        v-else
+        v-model:value="code"
+        :language="language"
+        theme="vs-dark"
+        :options="{
+          automaticLayout: true,
+          fontSize: 14,
+          fontFamily: 'Fira Code, Consolas, monospace',
+          minimap: { enabled: true },
+          scrollBeyondLastLine: false,
+          padding: { top: 16 },
+          readOnly: isReadOnly,
+          wordWrap: 'on',
+          lineNumbers: 'on',
+          renderLineHighlight: 'all',
+          cursorBlinking: 'smooth',
+          smoothScrolling: true
+        }"
+        @change="isDirty = true"
+        class="h-full w-full"
+      />
+      
+      <!-- 加载遮罩 -->
+      <div v-if="isLoadingContent" class="absolute inset-0 bg-slate-900/70 backdrop-blur-sm flex items-center justify-center z-10">
+        <div class="flex flex-col items-center">
+          <div class="i-heroicons-arrow-path animate-spin w-10 h-10 text-blue-500"></div>
+          <p class="mt-3 text-slate-400">加载中...</p>
         </div>
+      </div>
+      
+      <!-- 只读模式指示 -->
+      <div 
+        v-if="isReadOnly && selectedFile" 
+        class="absolute top-4 right-4 px-3 py-1.5 bg-amber-500/20 text-amber-400 text-xs rounded-full border border-amber-500/30"
+      >
+        只读模式
+      </div>
     </div>
   </div>
 </template>
