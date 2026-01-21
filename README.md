@@ -1,100 +1,142 @@
 # Project Nexus
 
-**Project Nexus** 是一个基于 **Vue 3** 和 **TypeScript** 构建的浏览器扩展（Command Center）。它旨在提供一个“本地优先、云端同步”的配置管理与笔记环境，充当用户的“数字第二大脑”。
+<div align="center">
 
-核心理念：**Local-First**（本地优先）、**Gist Sync**（Gist 同步）、**Cyberpunk UI**（赛博风格指挥舱）。
+**分布式配置指挥舱** | Distributed Configuration Command Center
 
-## 1. 项目架构 (Architecture)
+_Your digital second brain, synced in silence._
 
-本项目采用清晰的分层架构（Clean Architecture），确保业务逻辑与基础设施解耦。
+[![Vue 3](https://img.shields.io/badge/Vue-3.x-42b883?logo=vue.js)](https://vuejs.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178c6?logo=typescript)](https://www.typescriptlang.org/)
+[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-### 1.1 目录结构
+</div>
 
-```
-src/
-├── core/                   # 核心领域层 (Domain Layer)
-│   └── domain/
-│       └── types.ts        # 核心接口定义 (NexusIndex, NexusConfig, GistFile)
-├── infrastructure/         # 基础设施层 (Infrastructure Layer)
-│   ├── github/             # GitHub API 交互实现
-│   │   └── GistRepository.ts
-│   ├── storage/            # 本地存储实现 (chrome.storage / localStorage)
-│   │   └── LocalStore.ts
-│   └── index.ts            # 依赖注入/单例导出
-├── stores/                 # 应用状态层 (Application Layer / State Management)
-│   ├── useAuthStore.ts     # 认证状态管理 (Token)
-│   └── useNexusStore.ts    # 核心业务状态管理 (Sync, Index, Selection)
-├── views/                  # 视图页面 (Presentation Layer)
-│   ├── Welcome.vue         # 首次引导/登录页
-│   └── CommandCenter.vue   # 主应用界面
-├── components/             # UI 组件
-│   └── layout/
-│       ├── Sidebar.vue     # 左侧分类导航
-│       ├── ConfigList.vue  # 中间配置列表 (集成 Fuse.js 搜索)
-│       └── EditorPane.vue  # 右侧编辑器 (集成 Monaco Editor)
-├── App.vue                 # 根组件 (Theme Config)
-├── main.ts                 # Vue 入口
-├── background.ts           # Service Worker (Extension Background)
-├── manifest.json           # Manifest V3 配置
-└── index.html              # HTML 入口
-```
+---
 
-### 1.2 核心技术栈
+## ✨ 特性
 
--   **Frontend Framework**: Vue 3 (Script Setup)
--   **Build Tool**: Vite + @crxjs/vite-plugin
--   **State Management**: Pinia
--   **UI Framework**: Naive UI + TailwindCSS (UnoCSS)
--   **Editor**: Monaco Editor (@guolao/vue-monaco-editor)
--   **Search**: Fuse.js (Fuzzy Search)
--   **API Client**: Octokit (GitHub API)
--   **Persistence**: `chrome.storage.local` (Extension) / `localStorage` (Web Fallback)
+- 🔐 **零信任架构** - 数据存储在你的 Private Gist，无第三方服务器
+- 🎨 **深色/浅色主题** - 自动跟随系统或手动切换
+- ⚡ **全键盘操作** - `Ctrl+P` 搜索, `Ctrl+S` 保存
+- 📝 **Monaco 编辑器** - VS Code 同款内核，语法高亮
+- 🔍 **模糊搜索** - 基于 Fuse.js 的高性能搜索
+- 📱 **本地优先** - 离线可用，上线自动同步
 
-## 2. 核心业务逻辑 (Core Domain)
+---
 
-### 2.1 数据模型
--   **NexusIndex**: 存储在 Gist 中的核心索引文件 (`nexus_index.json`)，包含分类 (`categories`) 和文件元数据 (`items`)。
--   **GistFile**: Gist 中的实际文件内容。
--   **NexusConfig**: 本地配置，包含 GitHub Token、Gist ID、同步间隔等。
+## 🛠️ 技术栈
 
-### 2.2 同步策略 (Sync Strategy)
--   **Zero-Trust / Private**: 数据存储在用户的 Private Gist 中。
--   **Local-First**: 读取优先使用本地缓存 (`LocalStoreRepository`)，以确加载速度。
--   **Manual/Auto Sync**: `useNexusStore` 负责协调 `GistRepository` (云端) 和 `LocalStoreRepository` (本地) 的数据同步。
+| 模块          | 技术选型                  |
+| ------------- | ------------------------- |
+| **Framework** | Vue 3 + TypeScript        |
+| **Build**     | Vite + @crxjs/vite-plugin |
+| **State**     | Pinia                     |
+| **UI**        | Naive UI + UnoCSS         |
+| **Editor**    | Monaco Editor             |
+| **Search**    | Fuse.js                   |
+| **API**       | Octokit (GitHub API)      |
 
-## 3. 开发指南 (Development Guide)
+---
 
-### 3.1 环境要求
--   Node.js 18+
--   pnpm / npm
+## 🚀 快速开始
 
-### 3.2 运行开发环境
+### 环境要求
 
-**模式 A: Web 预览模式 (推荐)**
-无需加载扩展，直接在浏览器中预览 UI（Mock 了部分 Chrome API）。
+- Node.js 18+
+- npm / pnpm
+
+### 开发模式
+
 ```bash
+# 安装依赖
+npm install
+
+# Web 预览模式 (推荐)
 npm run dev:web
-# Access: http://localhost:3333
-```
+# 访问 http://localhost:3333
 
-**模式 B: 扩展开发模式**
-在真实扩展环境中调试。
-```bash
+# 浏览器扩展模式
 npm run dev
-# Load extension in chrome://extensions from 'dist' folder
+# 在 chrome://extensions 加载 dist 目录
 ```
 
-### 3.3 构建生产版本
+### 构建生产版本
+
 ```bash
 npm run build
 ```
-产物位于 `dist/` 目录。
-
-## 4. 关键功能点 (Features)
-1.  **Welcome Flow**: 引导用户输入 GitHub Token 并验证权限 (`gist` scope)。
-2.  **Command Center**: 三栏布局，支持键盘快捷键 (`Ctrl+S` 保存)。
-3.  **Search**: 基于 Fuse.js 的高性能模糊搜索。
-4.  **Edit**: 集成 Monaco Editor，支持多语言语法高亮。
 
 ---
-*Created by Antigravity Agent*
+
+## 📁 项目结构
+
+```
+src/
+├── core/domain/          # 核心领域层 - 类型定义
+├── infrastructure/       # 基础设施层 - GitHub API / 本地存储
+├── stores/               # 状态管理 - Pinia stores
+├── views/                # 页面视图
+├── components/           # UI 组件
+│   ├── layout/           # 布局组件 (Sidebar, ConfigList, EditorPane)
+│   └── GlobalSearch.vue  # 全局搜索
+├── App.vue               # 根组件
+└── main.ts               # 入口文件
+```
+
+---
+
+## 🎯 功能清单
+
+### ✅ 已实现
+
+- [x] GitHub Token 认证与 Gist 同步
+- [x] 三栏布局 (分类 → 列表 → 编辑器)
+- [x] 分类和配置的 CRUD 操作
+- [x] 右键菜单支持
+- [x] 深色/浅色/自动主题切换
+- [x] 全局搜索 (Ctrl+P)
+- [x] Monaco 编辑器集成
+- [x] 编辑器只读模式
+- [x] 多语言语法高亮
+
+### 🚧 开发中
+
+- [ ] 版本历史 - 查看和回滚 Gist 历史版本
+- [ ] 编辑器增强 - 代码格式化、查找替换、字体调整
+
+### 📋 计划中
+
+- [ ] 收藏/置顶功能
+- [ ] 批量操作 (多选、批量删除)
+- [ ] 快捷键系统增强
+- [ ] 拖拽排序 (分类和配置)
+- [ ] 离线支持优化
+- [ ] 标签过滤系统
+- [ ] 导入/导出功能
+
+---
+
+## ⌨️ 快捷键
+
+| 快捷键     | 功能         |
+| ---------- | ------------ |
+| `Ctrl + P` | 全局搜索     |
+| `Ctrl + S` | 保存当前文件 |
+| `Ctrl + F` | 查找         |
+| `Ctrl + H` | 替换         |
+| `Ctrl + G` | 跳转到行     |
+
+---
+
+## 📄 License
+
+[MIT](LICENSE)
+
+---
+
+<div align="center">
+
+_Built with ❤️ by Antigravity Agent_
+
+</div>
