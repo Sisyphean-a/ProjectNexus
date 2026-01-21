@@ -9,9 +9,12 @@ import {
   NSelect,
   NTooltip,
   NButtonGroup,
+  NSlider,
+  NPopover,
   useMessage,
 } from "naive-ui";
 import { VueMonacoEditor } from "@guolao/vue-monaco-editor";
+import VersionHistory from "./VersionHistory.vue";
 
 const emit = defineEmits<{
   "open-search": [];
@@ -40,6 +43,13 @@ const language = ref("yaml");
 const isDirty = ref(false);
 const isLoadingContent = ref(false);
 const isReadOnly = ref(false);
+
+// Monaco 编辑器实例
+const editorRef = ref<any>(null);
+
+// 编辑器增强
+const fontSize = ref(14);
+const showHistoryPanel = ref(false);
 
 // 语言选项
 const languageOptions = [
@@ -141,6 +151,34 @@ function handleKeyDown(e: KeyboardEvent) {
       handleSave();
     }
   }
+  // Ctrl+G 跳转到行
+  if ((e.ctrlKey || e.metaKey) && e.key === "g") {
+    e.preventDefault();
+    triggerEditorAction("editor.action.gotoLine");
+  }
+  // Ctrl+H 替换
+  if ((e.ctrlKey || e.metaKey) && e.key === "h") {
+    e.preventDefault();
+    triggerEditorAction("editor.action.startFindReplaceAction");
+  }
+}
+
+// 触发 Monaco 编辑器内置操作
+function triggerEditorAction(actionId: string) {
+  if (editorRef.value) {
+    editorRef.value.trigger("keyboard", actionId);
+  }
+}
+
+// 恢复历史版本
+function handleRestoreVersion(content: string) {
+  code.value = content;
+  isDirty.value = true;
+}
+
+// 编辑器加载完成
+function handleEditorMount(editor: any) {
+  editorRef.value = editor;
 }
 </script>
 
@@ -204,6 +242,46 @@ function handleKeyDown(e: KeyboardEvent) {
 
         <!-- 文件操作按钮组 -->
         <NButtonGroup v-if="selectedFile" size="small">
+          <!-- 历史记录按钮 -->
+          <NTooltip trigger="hover">
+            <template #trigger>
+              <NButton
+                :quaternary="themeStore.isDark"
+                :tertiary="!themeStore.isDark"
+                @click="showHistoryPanel = true"
+              >
+                <template #icon>
+                  <div class="i-heroicons-clock w-4 h-4"></div>
+                </template>
+              </NButton>
+            </template>
+            版本历史
+          </NTooltip>
+
+          <!-- 字体大小调整 -->
+          <NPopover trigger="click" placement="bottom">
+            <template #trigger>
+              <NButton
+                :quaternary="themeStore.isDark"
+                :tertiary="!themeStore.isDark"
+              >
+                <template #icon>
+                  <div class="i-heroicons-adjustments-horizontal w-4 h-4"></div>
+                </template>
+              </NButton>
+            </template>
+            <div class="w-40 p-2">
+              <div
+                class="text-xs mb-2"
+                :class="themeStore.isDark ? 'text-slate-400' : 'text-slate-500'"
+              >
+                字体大小: {{ fontSize }}px
+              </div>
+              <NSlider v-model:value="fontSize" :min="10" :max="24" :step="1" />
+            </div>
+          </NPopover>
+
+          <!-- 复制按钮 -->
           <NTooltip trigger="hover">
             <template #trigger>
               <NButton
@@ -307,7 +385,7 @@ function handleKeyDown(e: KeyboardEvent) {
         :theme="themeStore.isDark ? 'vs-dark' : 'vs'"
         :options="{
           automaticLayout: true,
-          fontSize: 14,
+          fontSize: fontSize,
           fontFamily: 'Fira Code, Consolas, monospace',
           minimap: { enabled: true },
           scrollBeyondLastLine: false,
@@ -320,6 +398,7 @@ function handleKeyDown(e: KeyboardEvent) {
           smoothScrolling: true,
         }"
         @change="isDirty = true"
+        @mount="handleEditorMount"
         class="h-full w-full"
       />
 
@@ -350,5 +429,12 @@ function handleKeyDown(e: KeyboardEvent) {
         只读模式
       </div>
     </div>
+
+    <!-- 版本历史面板 -->
+    <VersionHistory
+      v-model:show="showHistoryPanel"
+      :filename="selectedFile?.gist_file || ''"
+      @restore="handleRestoreVersion"
+    />
   </div>
 </template>
