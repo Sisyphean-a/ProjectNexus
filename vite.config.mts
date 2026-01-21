@@ -7,16 +7,26 @@ import Vue from '@vitejs/plugin-vue'
 import Icons from 'unplugin-icons/vite'
 import IconsResolver from 'unplugin-icons/resolver'
 import Components from 'unplugin-vue-components/vite'
+import { NaiveUiResolver } from 'unplugin-vue-components/resolvers'
 import AutoImport from 'unplugin-auto-import/vite'
 import UnoCSS from 'unocss/vite'
-import { isDev, port, r } from './scripts/utils'
+import { crx } from '@crxjs/vite-plugin'
+import { resolve } from 'path'
+import { readFileSync } from 'fs'
 import packageJson from './package.json'
+
+const manifest = JSON.parse(readFileSync('./src/manifest.json', 'utf-8'))
+
+const port = Number(process.env.PORT) || 3333
+export const r = (...args: string[]) => resolve(__dirname, ...args)
+export const isDev = process.env.NODE_ENV !== 'production'
 
 export const sharedConfig: UserConfig = {
   root: r('src'),
   resolve: {
     alias: {
       '~/': `${r('src')}/`,
+      '@/': `${r('src')}/`,
     },
   },
   define: {
@@ -34,6 +44,7 @@ export const sharedConfig: UserConfig = {
             ['=', 'browser'],
           ],
         },
+        'pinia',
       ],
       dts: r('src/auto-imports.d.ts'),
     }),
@@ -48,6 +59,7 @@ export const sharedConfig: UserConfig = {
         IconsResolver({
           prefix: '',
         }),
+        NaiveUiResolver()
       ],
     }),
 
@@ -56,6 +68,9 @@ export const sharedConfig: UserConfig = {
 
     // https://github.com/unocss/unocss
     UnoCSS(),
+    
+    // CRXJS Vite Plugin - Only load if NOT web mode
+    process.env.TARGET !== 'web' && crx({ manifest }),
 
     // rewrite assets to use relative path
     {
@@ -72,6 +87,9 @@ export const sharedConfig: UserConfig = {
       'vue',
       '@vueuse/core',
       'webextension-polyfill',
+      'naive-ui',
+      'pinia', 
+      'octokit'
     ],
     exclude: [
       'vue-demi',
@@ -81,9 +99,14 @@ export const sharedConfig: UserConfig = {
 
 export default defineConfig(({ command }) => ({
   ...sharedConfig,
-  base: command === 'serve' ? `http://localhost:${port}/` : '/dist/',
+  base: command === 'serve' ? `http://localhost:${port}/` : '/',
   server: {
     port,
+    strictPort: true,
+    headers: {
+      'Access-Control-Allow-Origin': '*',
+    },
+    cors: true,
     hmr: {
       host: 'localhost',
     },
@@ -93,8 +116,8 @@ export default defineConfig(({ command }) => ({
     watch: isDev
       ? {}
       : undefined,
-    outDir: r('extension/dist'),
-    emptyOutDir: false,
+    outDir: r('dist'),
+    emptyOutDir: true,
     sourcemap: isDev ? 'inline' : false,
     // https://developer.chrome.com/docs/webstore/program_policies/#:~:text=Code%20Readability%20Requirements
     terserOptions: {
@@ -102,9 +125,7 @@ export default defineConfig(({ command }) => ({
     },
     rollupOptions: {
       input: {
-        options: r('src/options/index.html'),
-        popup: r('src/popup/index.html'),
-        sidepanel: r('src/sidepanel/index.html'),
+        index: 'index.html',
       },
     },
   },
