@@ -1,138 +1,100 @@
-# WebExtension Vite Starter
+# Project Nexus
 
-A [Vite](https://vitejs.dev/) powered WebExtension ([Chrome](https://developer.chrome.com/docs/extensions/reference/), [FireFox](https://addons.mozilla.org/en-US/developers/), etc.) starter template.
+**Project Nexus** 是一个基于 **Vue 3** 和 **TypeScript** 构建的浏览器扩展（Command Center）。它旨在提供一个“本地优先、云端同步”的配置管理与笔记环境，充当用户的“数字第二大脑”。
 
-<p align="center">
-<sub>Popup</sub><br/>
-<img width="655" src="https://user-images.githubusercontent.com/11247099/126741643-813b3773-17ff-4281-9737-f319e00feddc.png"><br/>
-<sub>Options Page</sub><br/>
-<img width="655" src="https://user-images.githubusercontent.com/11247099/126741653-43125b62-6578-4452-83a7-bee19be2eaa2.png"><br/>
-<sub>Inject Vue App into the Content Script</sub><br/>
-<img src="https://user-images.githubusercontent.com/11247099/130695439-52418cf0-e186-4085-8e19-23fe808a274e.png">
-</p>
+核心理念：**Local-First**（本地优先）、**Gist Sync**（Gist 同步）、**Cyberpunk UI**（赛博风格指挥舱）。
 
-## Features
+## 1. 项目架构 (Architecture)
 
-- ⚡️ **Instant HMR** - use **Vite** on dev (no more refresh!)
-- 🥝 Vue 3 - Composition API, [`<script setup>` syntax](https://github.com/vuejs/rfcs/blob/master/active-rfcs/0040-script-setup.md) and more!
-- 💬 Effortless communications - powered by [`webext-bridge`](https://github.com/antfu/webext-bridge) and [VueUse](https://github.com/antfu/vueuse) storage
-- 🌈 [UnoCSS](https://github.com/unocss/unocss) - The instant on-demand Atomic CSS engine.
-- 🦾 [TypeScript](https://www.typescriptlang.org/) - type safe
-- 📦 [Components auto importing](./src/components)
-- 🌟 [Icons](./src/components) - Access to icons from any iconset directly
-- 🖥 Content Script - Use Vue even in content script
-- 🌍 WebExtension - isomorphic extension for Chrome, Firefox, and others
-- 📃 Dynamic `manifest.json` with full type support
+本项目采用清晰的分层架构（Clean Architecture），确保业务逻辑与基础设施解耦。
 
-## Pre-packed
+### 1.1 目录结构
 
-### WebExtension Libraries
-
-- [`webextension-polyfill`](https://github.com/mozilla/webextension-polyfill) - WebExtension browser API Polyfill with types
-- [`webext-bridge`](https://github.com/antfu/webext-bridge) - effortlessly communication between contexts
-
-### Vite Plugins
-
-- [`unplugin-auto-import`](https://github.com/antfu/unplugin-auto-import) - Directly use `browser` and Vue Composition API without importing
-- [`unplugin-vue-components`](https://github.com/antfu/vite-plugin-components) - components auto import
-- [`unplugin-icons`](https://github.com/antfu/unplugin-icons) - icons as components
-  - [Iconify](https://iconify.design) - use icons from any icon sets [🔍Icônes](https://icones.netlify.app/)
-
-### Vue Plugins
-
-- [VueUse](https://github.com/antfu/vueuse) - collection of useful composition APIs
-
-### UI Frameworks
-
-- [UnoCSS](https://github.com/unocss/unocss) - the instant on-demand Atomic CSS engine
-
-### Coding Style
-
-- Use Composition API with [`<script setup>` SFC syntax](https://github.com/vuejs/rfcs/pull/227)
-- [ESLint](https://eslint.org/) with [@antfu/eslint-config](https://github.com/antfu/eslint-config), single quotes, no semi
-
-### Dev tools
-
-- [TypeScript](https://www.typescriptlang.org/)
-- [pnpm](https://pnpm.js.org/) - fast, disk space efficient package manager
-- [esno](https://github.com/antfu/esno) - TypeScript / ESNext node runtime powered by esbuild
-- [npm-run-all](https://github.com/mysticatea/npm-run-all) - Run multiple npm-scripts in parallel or sequential
-- [web-ext](https://github.com/mozilla/web-ext) - Streamlined experience for developing web extensions
-
-## Use the Template
-
-### GitHub Template
-
-[Create a repo from this template on GitHub](https://github.com/antfu/vitesse-webext/generate).
-
-### Clone to local
-
-If you prefer to do it manually with the cleaner git history
-
-> If you don't have pnpm installed, run: npm install -g pnpm
-
-```bash
-npx degit antfu/vitesse-webext my-webext
-cd my-webext
-pnpm i
+```
+src/
+├── core/                   # 核心领域层 (Domain Layer)
+│   └── domain/
+│       └── types.ts        # 核心接口定义 (NexusIndex, NexusConfig, GistFile)
+├── infrastructure/         # 基础设施层 (Infrastructure Layer)
+│   ├── github/             # GitHub API 交互实现
+│   │   └── GistRepository.ts
+│   ├── storage/            # 本地存储实现 (chrome.storage / localStorage)
+│   │   └── LocalStore.ts
+│   └── index.ts            # 依赖注入/单例导出
+├── stores/                 # 应用状态层 (Application Layer / State Management)
+│   ├── useAuthStore.ts     # 认证状态管理 (Token)
+│   └── useNexusStore.ts    # 核心业务状态管理 (Sync, Index, Selection)
+├── views/                  # 视图页面 (Presentation Layer)
+│   ├── Welcome.vue         # 首次引导/登录页
+│   └── CommandCenter.vue   # 主应用界面
+├── components/             # UI 组件
+│   └── layout/
+│       ├── Sidebar.vue     # 左侧分类导航
+│       ├── ConfigList.vue  # 中间配置列表 (集成 Fuse.js 搜索)
+│       └── EditorPane.vue  # 右侧编辑器 (集成 Monaco Editor)
+├── App.vue                 # 根组件 (Theme Config)
+├── main.ts                 # Vue 入口
+├── background.ts           # Service Worker (Extension Background)
+├── manifest.json           # Manifest V3 配置
+└── index.html              # HTML 入口
 ```
 
-## Usage
+### 1.2 核心技术栈
 
-### Folders
+-   **Frontend Framework**: Vue 3 (Script Setup)
+-   **Build Tool**: Vite + @crxjs/vite-plugin
+-   **State Management**: Pinia
+-   **UI Framework**: Naive UI + TailwindCSS (UnoCSS)
+-   **Editor**: Monaco Editor (@guolao/vue-monaco-editor)
+-   **Search**: Fuse.js (Fuzzy Search)
+-   **API Client**: Octokit (GitHub API)
+-   **Persistence**: `chrome.storage.local` (Extension) / `localStorage` (Web Fallback)
 
-- `src` - main source.
-  - `contentScript` - scripts and components to be injected as `content_script`
-  - `background` - scripts for background.
-  - `components` - auto-imported Vue components that are shared in popup and options page.
-  - `styles` - styles shared in popup and options page
-  - `assets` - assets used in Vue components
-  - `manifest.ts` - manifest for the extension.
-- `extension` - extension package root.
-  - `assets` - static assets (mainly for `manifest.json`).
-  - `dist` - built files, also serve stub entry for Vite on development.
-- `scripts` - development and bundling helper scripts.
+## 2. 核心业务逻辑 (Core Domain)
 
-### Development
+### 2.1 数据模型
+-   **NexusIndex**: 存储在 Gist 中的核心索引文件 (`nexus_index.json`)，包含分类 (`categories`) 和文件元数据 (`items`)。
+-   **GistFile**: Gist 中的实际文件内容。
+-   **NexusConfig**: 本地配置，包含 GitHub Token、Gist ID、同步间隔等。
 
+### 2.2 同步策略 (Sync Strategy)
+-   **Zero-Trust / Private**: 数据存储在用户的 Private Gist 中。
+-   **Local-First**: 读取优先使用本地缓存 (`LocalStoreRepository`)，以确加载速度。
+-   **Manual/Auto Sync**: `useNexusStore` 负责协调 `GistRepository` (云端) 和 `LocalStoreRepository` (本地) 的数据同步。
+
+## 3. 开发指南 (Development Guide)
+
+### 3.1 环境要求
+-   Node.js 18+
+-   pnpm / npm
+
+### 3.2 运行开发环境
+
+**模式 A: Web 预览模式 (推荐)**
+无需加载扩展，直接在浏览器中预览 UI（Mock 了部分 Chrome API）。
 ```bash
-pnpm dev
+npm run dev:web
+# Access: http://localhost:3333
 ```
 
-Then **load extension in browser with the `extension/` folder**.
-
-For Firefox developers, you can run the following command instead:
-
+**模式 B: 扩展开发模式**
+在真实扩展环境中调试。
 ```bash
-pnpm dev-firefox
+npm run dev
+# Load extension in chrome://extensions from 'dist' folder
 ```
 
-`web-ext` auto reload the extension when `extension/` files changed.
-
-> While Vite handles HMR automatically in the most of the case, [Extensions Reloader](https://chrome.google.com/webstore/detail/fimgfedafeadlieiabdeeaodndnlbhid) is still recommended for cleaner hard reloading.
-
-## Using Gitpod
-
-If you have a web browser, you can get a fully pre-configured development environment with one click:
-
-[![Open in Gitpod](https://gitpod.io/button/open-in-gitpod.svg)](https://gitpod.io/#https://github.com/antfu/vitesse-webext)
-
-### Build
-
-To build the extension, run
-
+### 3.3 构建生产版本
 ```bash
-pnpm build
+npm run build
 ```
+产物位于 `dist/` 目录。
 
-And then pack files under `extension`, you can upload `extension.crx` or `extension.xpi` to appropriate extension store.
+## 4. 关键功能点 (Features)
+1.  **Welcome Flow**: 引导用户输入 GitHub Token 并验证权限 (`gist` scope)。
+2.  **Command Center**: 三栏布局，支持键盘快捷键 (`Ctrl+S` 保存)。
+3.  **Search**: 基于 Fuse.js 的高性能模糊搜索。
+4.  **Edit**: 集成 Monaco Editor，支持多语言语法高亮。
 
-## Credits
-
-[![Volta](https://user-images.githubusercontent.com/904724/195351818-9e826ea9-12a0-4b06-8274-352743cd2047.png)](https://volta.net)
-
-This template is originally made for the [volta.net](https://volta.net) browser extension.
-
-## Variations
-
-This is a variant of [Vitesse](https://github.com/antfu/vitesse), check out the [full variations list](https://github.com/antfu/vitesse#variations).
+---
+*Created by Antigravity Agent*

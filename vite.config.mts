@@ -124,9 +124,6 @@ export default defineConfig(({ command }) => ({
       mangle: false,
     },
     rollupOptions: {
-      input: {
-        index: 'index.html',
-      },
     },
   },
   test: {
