@@ -1,32 +1,32 @@
 /// <reference types="vitest" />
 
-import { dirname, relative } from 'node:path'
-import type { UserConfig } from 'vite'
-import { defineConfig } from 'vite'
-import Vue from '@vitejs/plugin-vue'
-import Icons from 'unplugin-icons/vite'
-import IconsResolver from 'unplugin-icons/resolver'
-import Components from 'unplugin-vue-components/vite'
-import { NaiveUiResolver } from 'unplugin-vue-components/resolvers'
-import AutoImport from 'unplugin-auto-import/vite'
-import UnoCSS from 'unocss/vite'
-import { crx } from '@crxjs/vite-plugin'
-import { resolve } from 'path'
-import { readFileSync } from 'fs'
-import packageJson from './package.json'
+import { dirname, relative } from "node:path";
+import type { UserConfig } from "vite";
+import { defineConfig } from "vite";
+import Vue from "@vitejs/plugin-vue";
+import Icons from "unplugin-icons/vite";
+import IconsResolver from "unplugin-icons/resolver";
+import Components from "unplugin-vue-components/vite";
+import { NaiveUiResolver } from "unplugin-vue-components/resolvers";
+import AutoImport from "unplugin-auto-import/vite";
+import UnoCSS from "unocss/vite";
+import { crx } from "@crxjs/vite-plugin";
+import { resolve } from "path";
+import { readFileSync } from "fs";
+import packageJson from "./package.json";
 
-const manifest = JSON.parse(readFileSync('./src/manifest.json', 'utf-8'))
+const manifest = JSON.parse(readFileSync("./src/manifest.json", "utf-8"));
 
-const port = Number(process.env.PORT) || 3333
-export const r = (...args: string[]) => resolve(__dirname, ...args)
-export const isDev = process.env.NODE_ENV !== 'production'
+const port = Number(process.env.PORT) || 3333;
+export const r = (...args: string[]) => resolve(__dirname, ...args);
+export const isDev = process.env.NODE_ENV !== "production";
 
 export const sharedConfig: UserConfig = {
-  root: r('src'),
+  root: r("src"),
   resolve: {
     alias: {
-      '~/': `${r('src')}/`,
-      '@/': `${r('src')}/`,
+      "~/": `${r("src")}/`,
+      "@/": `${r("src")}/`,
     },
   },
   define: {
@@ -38,28 +38,26 @@ export const sharedConfig: UserConfig = {
 
     AutoImport({
       imports: [
-        'vue',
+        "vue",
         {
-          'webextension-polyfill': [
-            ['=', 'browser'],
-          ],
+          "webextension-polyfill": [["=", "browser"]],
         },
-        'pinia',
+        "pinia",
       ],
-      dts: r('src/auto-imports.d.ts'),
+      dts: r("src/auto-imports.d.ts"),
     }),
 
     // https://github.com/antfu/unplugin-vue-components
     Components({
-      dirs: [r('src/components')],
+      dirs: [r("src/components")],
       // generate `components.d.ts` for ts support with Volar
-      dts: r('src/components.d.ts'),
+      dts: r("src/components.d.ts"),
       resolvers: [
         // auto import icons
         IconsResolver({
-          prefix: '',
+          prefix: "",
         }),
-        NaiveUiResolver()
+        NaiveUiResolver(),
       ],
     }),
 
@@ -68,66 +66,65 @@ export const sharedConfig: UserConfig = {
 
     // https://github.com/unocss/unocss
     UnoCSS(),
-    
+
     // CRXJS Vite Plugin - Only load if NOT web mode
-    process.env.TARGET !== 'web' && crx({ manifest }),
+    process.env.TARGET !== "web" && crx({ manifest }),
 
     // rewrite assets to use relative path
     {
-      name: 'assets-rewrite',
-      enforce: 'post',
-      apply: 'build',
+      name: "assets-rewrite",
+      enforce: "post",
+      apply: "build",
       transformIndexHtml(html, { path }) {
-        return html.replace(/"\/assets\//g, `"${relative(dirname(path), '/assets')}/`)
+        return html.replace(
+          /"\/assets\//g,
+          `"${relative(dirname(path), "/assets")}/`,
+        );
       },
     },
   ],
   optimizeDeps: {
     include: [
-      'vue',
-      '@vueuse/core',
-      'webextension-polyfill',
-      'naive-ui',
-      'pinia', 
-      'octokit'
+      "vue",
+      "@vueuse/core",
+      "webextension-polyfill",
+      "naive-ui",
+      "pinia",
+      "octokit",
+      "dexie",
     ],
-    exclude: [
-      'vue-demi',
-    ],
+    exclude: ["vue-demi"],
   },
-}
+};
 
 export default defineConfig(({ command }) => ({
   ...sharedConfig,
-  base: command === 'serve' ? `http://localhost:${port}/` : '/',
+  base: command === "serve" ? `http://localhost:${port}/` : "/",
   server: {
     port,
     strictPort: true,
     headers: {
-      'Access-Control-Allow-Origin': '*',
+      "Access-Control-Allow-Origin": "*",
     },
     cors: true,
     hmr: {
-      host: 'localhost',
+      host: "localhost",
     },
     origin: `http://localhost:${port}`,
   },
   build: {
-    watch: isDev
-      ? {}
-      : undefined,
-    outDir: r('dist'),
+    watch: isDev ? {} : undefined,
+    outDir: r("dist"),
     emptyOutDir: true,
-    sourcemap: isDev ? 'inline' : false,
+    sourcemap: isDev ? "inline" : false,
     // https://developer.chrome.com/docs/webstore/program_policies/#:~:text=Code%20Readability%20Requirements
     terserOptions: {
       mangle: false,
     },
-    rollupOptions: {
-    },
+    rollupOptions: {},
   },
   test: {
     globals: true,
-    environment: 'jsdom',
+    environment: "jsdom",
   },
-}))
+}));
