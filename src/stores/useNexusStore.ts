@@ -145,8 +145,9 @@ export const useNexusStore = defineStore('nexus', () => {
   // ========== 索引保存 ==========
   async function saveIndex(forceOverwrite = false) {
     if (!index.value || !currentGistId.value) {
-      console.warn('[Nexus Save] 无法保存：index 或 gistId 为空')
-      return
+      const errorMsg = '[Nexus Save] 无法保存：index 或 gistId 为空';
+      console.warn(errorMsg);
+      throw new Error(errorMsg); // ✅ 抛出异常而不是静默返回
     }
     
     // 空数据保护：如果本地索引完全为空，阻止推送
@@ -179,7 +180,16 @@ export const useNexusStore = defineStore('nexus', () => {
   // ========== 分类 CRUD ==========
   
   async function addCategory(name: string, icon = 'folder') {
-    if (!index.value) return
+    console.log('[addCategory] 开始创建分类:', name);
+    
+    if (!index.value) {
+      console.error('[addCategory] index.value 为空');
+      return;
+    }
+    
+    console.log('[addCategory] currentGistId:', currentGistId.value);
+    console.log('[addCategory] index.value.categories.length:', index.value.categories.length);
+    
     // Use IdGenerator or simple random string if acceptable?
     // Let's us IdGenerator from shared kernel. 
     // Wait, I need to import it. I'll add import in another step or just use simple logic here if I don't want to mess up imports block again?
@@ -195,10 +205,30 @@ export const useNexusStore = defineStore('nexus', () => {
       icon,
       items: []
     }
+    
+    console.log('[addCategory] 新分类对象:', newCategory);
+    
+    // 先添加到本地索引
     index.value.categories.push(newCategory)
-    await saveIndex()
-    selectedCategoryId.value = newCategory.id
-    return newCategory
+    console.log('[addCategory] 已添加到本地索引,当前分类数:', index.value.categories.length);
+    
+    try {
+      // 尝试保存到远程
+      console.log('[addCategory] 准备调用 saveIndex...');
+      await saveIndex()
+      console.log('[addCategory] saveIndex 成功');
+      selectedCategoryId.value = newCategory.id
+      return newCategory
+    } catch (e) {
+      console.error('[addCategory] saveIndex 失败:', e);
+      // 如果远程保存失败,回滚本地更改
+      const idx = index.value.categories.findIndex(c => c.id === newCategory.id)
+      if (idx !== -1) {
+        index.value.categories.splice(idx, 1)
+        console.log('[addCategory] 已回滚本地更改');
+      }
+      throw e // 重新抛出异常,让调用者知道失败了
+    }
   }
 
   async function updateCategory(id: string, updates: { name?: string; icon?: string }) {

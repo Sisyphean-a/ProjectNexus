@@ -76,12 +76,12 @@ async function handleAddCategory() {
   try {
     await nexusStore.addCategory(newCategoryName.value.trim());
     message.success("分类创建成功");
-    showAddModal.value = false;
     newCategoryName.value = "";
   } catch (e) {
     message.error("创建失败");
   } finally {
     isAdding.value = false;
+    showAddModal.value = false;
   }
 }
 
