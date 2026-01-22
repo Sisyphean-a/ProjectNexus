@@ -1,6 +1,8 @@
 // Background service worker
-import { onMessage } from 'webext-bridge/background'
+import browser from "webextension-polyfill";
 
-console.log('Nexus background service worker started')
+console.log("Nexus background service worker started");
 
-// Placeholder for future logic
+browser.action.onClicked.addListener(() => {
+  browser.tabs.create({ url: "index.html" });
+});

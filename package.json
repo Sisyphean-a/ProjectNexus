@@ -54,6 +54,7 @@
     "@guolao/vue-monaco-editor": "^1.6.0",
     "dexie": "^4.2.1",
     "fuse.js": "^7.1.0",
+    "monaco-editor": "^0.55.1",
     "naive-ui": "^2.43.2",
     "octokit": "^5.0.5",
     "pinia": "^3.0.4"

@@ -3,27 +3,16 @@
   "name": "Project Nexus",
   "version": "1.0.0",
   "description": "Your digital second brain, synced in silence.",
-  "permissions": [
-    "storage",
-    "tabs",
-    "activeTab",
-    "scripting"
-  ],
-  "host_permissions": [
-    "https://api.github.com/*",
-    "https://gist.github.com/*"
-  ],
+  "permissions": ["storage", "tabs", "activeTab", "scripting"],
+  "host_permissions": ["https://api.github.com/*", "https://gist.github.com/*"],
   "action": {
-    "default_title": "Project Nexus",
-    "default_popup": "index.html"
+    "default_title": "Project Nexus"
   },
   "background": {
     "service_worker": "background.ts",
     "type": "module"
   },
-  "chrome_url_overrides": {
-    "newtab": "index.html"
-  },
+
   "commands": {
     "open_nexus": {
       "suggested_key": {
