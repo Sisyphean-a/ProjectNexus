@@ -11,6 +11,10 @@ export const useNexusStore = defineStore('nexus', () => {
   const index = ref<NexusIndex | null>(null)
   const isLoading = ref(false)
   
+  // 同步状态追踪
+  const lastSyncedAt = ref<string | null>(null)      // 上次成功同步的时间
+  const remoteUpdatedAt = ref<string | null>(null)   // 远程索引的 updated_at
+  
   // Current Gist ID being used
   const currentGistId = computed(() => config.value?.gistId)
 
@@ -36,44 +40,50 @@ export const useNexusStore = defineStore('nexus', () => {
   }
 
   async function sync() {
-    if (!authStore.isAuthenticated) return
+    if (!authStore.isAuthenticated) {
+      throw new Error('未认证')
+    }
     isLoading.value = true
     
     try {
         let gistId = config.value?.gistId
 
-        // If no Gist ID known, try to find it
+        // 如果本地没有 gistId，尝试从 GitHub 查找
         if (!gistId) {
             gistId = await gistRepository.findNexusGist()
             if (gistId) {
-                // Found existing gist, save ID
                 await updateConfig({ gistId })
             } else {
-                // Determine if we should create one? 
-                // For now, if not found, we just wait for user action or auto-create empty?
-                // Let's auto-create if not found to simplify flow, 
-                // OR better, let UI trigger creation ("Initialize Nexus").
-                // Returning early here if not found.
                 isLoading.value = false
-                return 'no_gist'
+                throw new Error('未找到 Nexus Gist，请先初始化')
             }
         }
         
-        // Fetch Gist content to get Index
-        if (gistId) {
-            const files = await gistRepository.getGistContent(gistId)
-            const indexFile = files['nexus_index.json']
-            if (indexFile) {
-                const remoteIndex = JSON.parse(indexFile.content) as NexusIndex
-                // TODO: Conflict resolution. For now, Remote Wins or Merge?
-                // Simple: Remote Wins for index.
-                index.value = remoteIndex
-                await localStoreRepository.saveIndex(remoteIndex)
+        // 获取 Gist 内容
+        const files = await gistRepository.getGistContent(gistId)
+        
+        const indexFile = files['nexus_index.json']
+        if (indexFile) {
+            const remoteIndex = JSON.parse(indexFile.content) as NexusIndex
+            
+            index.value = remoteIndex
+            await localStoreRepository.saveIndex(remoteIndex)
+            
+            // 记录同步状态
+            remoteUpdatedAt.value = remoteIndex.updated_at
+            lastSyncedAt.value = new Date().toISOString()
+            
+            // 如果当前没有选中分类，自动选中第一个
+            if (!selectedCategoryId.value && remoteIndex.categories.length > 0) {
+                selectedCategoryId.value = remoteIndex.categories[0].id
             }
+        } else {
+            throw new Error('nexus_index.json 不存在')
         }
         
     } catch (e) {
-        console.error('Sync failed', e)
+        console.error('[Nexus] 同步失败:', e)
+        throw e
     } finally {
         isLoading.value = false
     }
@@ -116,8 +126,46 @@ export const useNexusStore = defineStore('nexus', () => {
   }
 
   // ========== 索引保存 ==========
-  async function saveIndex() {
-    if (!index.value || !currentGistId.value) return
+  async function saveIndex(forceOverwrite = false) {
+    if (!index.value || !currentGistId.value) {
+      console.warn('[Nexus Save] 无法保存：index 或 gistId 为空')
+      return
+    }
+    
+    // 空数据保护：如果本地索引完全为空，阻止推送
+    if (index.value.categories.length === 0 && !forceOverwrite) {
+      console.warn('[Nexus Save] ⚠️ 本地索引为空，已阻止推送（可能会覆盖远程数据）')
+      throw new Error('本地索引为空，拒绝推送以防止数据丢失。如需清空远程，请使用强制覆盖。')
+    }
+    
+    // 冲突检测：获取远程最新版本的 updated_at
+    if (!forceOverwrite) {
+      try {
+        const files = await gistRepository.getGistContent(currentGistId.value)
+        const remoteIndexFile = files['nexus_index.json']
+        if (remoteIndexFile) {
+          const currentRemote = JSON.parse(remoteIndexFile.content) as NexusIndex
+          const remoteTime = new Date(currentRemote.updated_at).getTime()
+          const localTime = remoteUpdatedAt.value ? new Date(remoteUpdatedAt.value).getTime() : 0
+          
+          // 如果远程版本比我们上次同步时更新，说明有冲突
+          if (remoteTime > localTime) {
+            console.warn('[Nexus Save] ⚠️ 检测到冲突：远程有更新的版本！')
+            console.warn('[Nexus Save] 远程 updated_at:', currentRemote.updated_at)
+            console.warn('[Nexus Save] 本地记录的 updated_at:', remoteUpdatedAt.value)
+            throw new Error(`检测到同步冲突！远程数据已被其他设备更新。请先同步再操作。`)
+          }
+        }
+      } catch (e: any) {
+        if (e.message?.includes('同步冲突')) {
+          throw e  // 重新抛出冲突错误
+        }
+        // 其他错误（如网络问题）记录但继续
+        console.warn('[Nexus Save] 冲突检测失败，继续保存:', e)
+      }
+    }
+    
+    // 更新时间戳并保存
     index.value.updated_at = new Date().toISOString()
     await gistRepository.updateGistFile(
       currentGistId.value,
@@ -125,6 +173,12 @@ export const useNexusStore = defineStore('nexus', () => {
       JSON.stringify(index.value, null, 2)
     )
     await localStoreRepository.saveIndex(index.value)
+    
+    // 更新同步状态
+    remoteUpdatedAt.value = index.value.updated_at
+    lastSyncedAt.value = new Date().toISOString()
+    
+    console.log('[Nexus Save] ✅ 保存成功')
   }
 
   // ========== 分类 CRUD ==========
@@ -247,6 +301,8 @@ export const useNexusStore = defineStore('nexus', () => {
     selectedFileId,
     currentCategory,
     currentFileList,
+    lastSyncedAt,
+    remoteUpdatedAt,
     init,
     sync,
     initializeGist,

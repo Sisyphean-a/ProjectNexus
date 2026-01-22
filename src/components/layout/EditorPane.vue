@@ -81,36 +81,54 @@ watch(
       return;
     }
 
-    isLoadingContent.value = true;
-    try {
-      const files = await gistRepository.getGistContent(
-        nexusStore.currentGistId,
-      );
-      const file = files[selectedFile.value?.gist_file || ""];
+    await loadFileContent();
+  },
+);
 
-      if (file) {
-        code.value = file.content;
-        // 自动检测语言
-        const ext = file.filename.split(".").pop();
-        if (ext === "md") language.value = "markdown";
-        else if (ext === "json") language.value = "json";
-        else if (ext === "js") language.value = "javascript";
-        else if (ext === "ts") language.value = "typescript";
-        else if (ext === "py") language.value = "python";
-        else language.value = "yaml";
-
-        isDirty.value = false;
-      } else {
-        code.value = "";
-      }
-    } catch (e) {
-      console.error(e);
-      message.error("加载内容失败");
-    } finally {
-      isLoadingContent.value = false;
+// 监听同步完成，刷新当前文件内容
+watch(
+  () => nexusStore.lastSyncedAt,
+  async (newTime, oldTime) => {
+    // 只在同步时间变化且有选中文件时刷新
+    if (newTime && newTime !== oldTime && nexusStore.selectedFileId && nexusStore.currentGistId) {
+      await loadFileContent();
     }
   },
 );
+
+// 加载文件内容
+async function loadFileContent() {
+  if (!nexusStore.selectedFileId || !nexusStore.currentGistId) return;
+  
+  isLoadingContent.value = true;
+  try {
+    const files = await gistRepository.getGistContent(
+      nexusStore.currentGistId,
+    );
+    const file = files[selectedFile.value?.gist_file || ""];
+
+    if (file) {
+      code.value = file.content;
+      // 自动检测语言
+      const ext = file.filename.split(".").pop();
+      if (ext === "md") language.value = "markdown";
+      else if (ext === "json") language.value = "json";
+      else if (ext === "js") language.value = "javascript";
+      else if (ext === "ts") language.value = "typescript";
+      else if (ext === "py") language.value = "python";
+      else language.value = "yaml";
+
+      isDirty.value = false;
+    } else {
+      code.value = "";
+    }
+  } catch (e) {
+    console.error(e);
+    message.error("加载内容失败");
+  } finally {
+    isLoadingContent.value = false;
+  }
+}
 
 // 保存
 async function handleSave() {

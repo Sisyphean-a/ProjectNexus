@@ -16,6 +16,8 @@ onMounted(async () => {
   await authStore.init()
   if (authStore.isAuthenticated) {
     await nexusStore.init()
+    // 初始化后自动从远程同步最新数据
+    await nexusStore.sync()
   }
 })
 
