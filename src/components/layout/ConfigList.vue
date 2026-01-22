@@ -11,6 +11,7 @@ import {
   NDropdown,
   NModal,
   NSpace,
+  NSelect,
   useMessage,
   useDialog,
 } from "naive-ui";
@@ -27,7 +28,22 @@ const searchQuery = ref("");
 // 新建文件模态框
 const showAddModal = ref(false);
 const newFileName = ref("");
+const newFileLanguage = ref("yaml");
 const isAdding = ref(false);
+
+const languageOptions = [
+  { label: "YAML", value: "yaml" },
+  { label: "JSON", value: "json" },
+  { label: "Markdown", value: "markdown" },
+  { label: "JavaScript", value: "javascript" },
+  { label: "TypeScript", value: "typescript" },
+  { label: "Python", value: "python" },
+  { label: "HTML", value: "html" },
+  { label: "CSS", value: "css" },
+  { label: "Shell", value: "shell" },
+  { label: "XML", value: "xml" },
+  { label: "纯文本", value: "plaintext" },
+];
 
 // 右键菜单
 const showContextMenu = ref(false);
@@ -39,6 +55,9 @@ const contextMenuFileId = ref<string | null>(null);
 const showRenameModal = ref(false);
 const renameFileName = ref("");
 const renameFileId = ref<string | null>(null);
+
+// 删除中间态
+const deletingFileId = ref<string | null>(null);
 
 const fuse = computed(
   () =>
@@ -74,10 +93,12 @@ async function handleAddFile() {
     await nexusStore.addFile(
       nexusStore.selectedCategoryId,
       newFileName.value.trim(),
+      newFileLanguage.value,
     );
     message.success("文件创建成功");
     showAddModal.value = false;
     newFileName.value = "";
+    newFileLanguage.value = "yaml";
   } catch (e) {
     message.error("创建失败");
   } finally {
@@ -123,11 +144,15 @@ async function handleContextMenuSelect(key: string) {
       positiveText: "删除",
       negativeText: "取消",
       onPositiveClick: async () => {
+        // 设置删除中状态
+        deletingFileId.value = fileId;
         try {
           await nexusStore.deleteFile(nexusStore.selectedCategoryId!, fileId);
           message.success("已删除");
         } catch (e) {
           message.error("删除失败");
+        } finally {
+          deletingFileId.value = null;
         }
       },
     });
@@ -194,17 +219,27 @@ async function handleRenameFile() {
         <div
           v-for="item in filteredList"
           :key="item.id"
-          class="mx-2 mb-1 px-3 py-2.5 rounded-md cursor-pointer transition-all duration-200"
+          class="mx-2 mb-1 px-3 py-2.5 rounded-md cursor-pointer transition-all duration-300 relative"
           :class="[
-            nexusStore.selectedFileId === item.id
-              ? 'bg-blue-500/20 border-l-2 border-blue-500'
-              : themeStore.isDark
-                ? 'hover:bg-slate-700/50'
-                : 'hover:bg-slate-200/50',
+            deletingFileId === item.id
+              ? 'opacity-40 pointer-events-none scale-95'
+              : nexusStore.selectedFileId === item.id
+                ? 'bg-blue-500/20 border-l-2 border-blue-500'
+                : themeStore.isDark
+                  ? 'hover:bg-slate-700/50'
+                  : 'hover:bg-slate-200/50',
           ]"
           @click="handleSelect(item.id)"
           @contextmenu="handleContextMenu($event, item.id)"
         >
+          <!-- 删除中加载指示 -->
+          <div
+            v-if="deletingFileId === item.id"
+            class="absolute inset-0 flex items-center justify-center"
+          >
+            <div class="i-heroicons-arrow-path animate-spin w-5 h-5 text-red-400"></div>
+          </div>
+          
           <div
             class="font-medium"
             :class="themeStore.isDark ? 'text-slate-200' : 'text-slate-700'"
@@ -265,11 +300,18 @@ async function handleRenameFile() {
 
     <!-- 新建文件模态框 -->
     <NModal v-model:show="showAddModal" preset="dialog" title="新建配置">
-      <NInput
-        v-model:value="newFileName"
-        placeholder="输入配置名称"
-        @keydown.enter="handleAddFile"
-      />
+      <div class="space-y-4">
+        <NInput
+          v-model:value="newFileName"
+          placeholder="输入配置名称"
+          @keydown.enter="handleAddFile"
+        />
+        <NSelect
+          v-model:value="newFileLanguage"
+          :options="languageOptions"
+          placeholder="选择语言"
+        />
+      </div>
       <template #action>
         <NSpace>
           <NButton @click="showAddModal = false">取消</NButton>

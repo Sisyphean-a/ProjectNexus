@@ -1,8 +1,7 @@
 <script setup lang="ts">
-import { ref, computed, watch } from "vue";
+import { ref, computed, watch, nextTick } from "vue";
 import { useNexusStore } from "../../stores/useNexusStore";
 import { useThemeStore } from "../../stores/useThemeStore";
-import { gistRepository } from "../../infrastructure";
 import {
   NButton,
   NSwitch,
@@ -59,6 +58,10 @@ const languageOptions = [
   { label: "JavaScript", value: "javascript" },
   { label: "TypeScript", value: "typescript" },
   { label: "Python", value: "python" },
+  { label: "HTML", value: "html" },
+  { label: "CSS", value: "css" },
+  { label: "Shell", value: "shell" },
+  { label: "XML", value: "xml" },
   { label: "纯文本", value: "plaintext" },
 ];
 
@@ -96,32 +99,30 @@ watch(
   },
 );
 
+// 语言变更状态
+const isChangingLanguage = ref(false);
+const isProgrammaticUpdate = ref(false);
+
 // 加载文件内容
 async function loadFileContent() {
-  if (!nexusStore.selectedFileId || !nexusStore.currentGistId) return;
+  if (!nexusStore.selectedFileId) return;
   
   isLoadingContent.value = true;
   try {
-    const files = await gistRepository.getGistContent(
-      nexusStore.currentGistId,
-    );
-    const file = files[selectedFile.value?.gist_file || ""];
+    const content = await nexusStore.getFileContent(nexusStore.selectedFileId);
+    code.value = content;
+    
+    // 从数据库读取语言
+    const savedLanguage = await nexusStore.getFileLanguage(nexusStore.selectedFileId);
+    
+    // 标记为程序化更新，防止触发 watcher
+    isProgrammaticUpdate.value = true;
+    language.value = savedLanguage;
+    // 等待 watcher 处理完成（如果有）
+    await nextTick(); 
+    isProgrammaticUpdate.value = false;
 
-    if (file) {
-      code.value = file.content;
-      // 自动检测语言
-      const ext = file.filename.split(".").pop();
-      if (ext === "md") language.value = "markdown";
-      else if (ext === "json") language.value = "json";
-      else if (ext === "js") language.value = "javascript";
-      else if (ext === "ts") language.value = "typescript";
-      else if (ext === "py") language.value = "python";
-      else language.value = "yaml";
-
-      isDirty.value = false;
-    } else {
-      code.value = "";
-    }
+    isDirty.value = false;
   } catch (e) {
     console.error(e);
     message.error("加载内容失败");
@@ -130,20 +131,49 @@ async function loadFileContent() {
   }
 }
 
+// 监听语言变化，同步更改云端文件扩展名
+watch(language, async (newLang, oldLang) => {
+  if (!nexusStore.selectedFileId || isLoadingContent.value || isChangingLanguage.value || isProgrammaticUpdate.value) return;
+  if (newLang === oldLang) return;
+
+  isChangingLanguage.value = true;
+  const changingMessage = message.loading("更改语言中...", { duration: 0 });
+  
+  try {
+    const success = await nexusStore.changeFileLanguage(nexusStore.selectedFileId, newLang);
+    changingMessage.destroy();
+    if (success) {
+      message.success("语言已更改");
+    } else {
+      message.error("更改失败");
+      isProgrammaticUpdate.value = true;
+      language.value = oldLang;  // 回滚
+      await nextTick();
+      isProgrammaticUpdate.value = false;
+    }
+  } catch (e) {
+    changingMessage.destroy();
+    message.error("更改语言失败");
+    isProgrammaticUpdate.value = true;
+    language.value = oldLang;  // 回滚
+    await nextTick();
+    isProgrammaticUpdate.value = false;
+    console.error(e);
+  } finally {
+    isChangingLanguage.value = false;
+  }
+});
+
 // 保存
 async function handleSave() {
-  if (!selectedFile.value || !nexusStore.currentGistId) return;
+  if (!nexusStore.selectedFileId) return;
 
   const savingMessage = message.loading("保存中...", { duration: 0 });
   try {
-    await gistRepository.updateGistFile(
-      nexusStore.currentGistId,
-      selectedFile.value.gist_file,
-      code.value,
-    );
+    await nexusStore.saveFileContent(nexusStore.selectedFileId, code.value);
     isDirty.value = false;
     savingMessage.destroy();
-    message.success("已保存");
+    message.success("已保存并同步");
   } catch (e) {
     savingMessage.destroy();
     message.error("保存失败");
