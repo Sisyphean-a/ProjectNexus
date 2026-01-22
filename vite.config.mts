@@ -121,7 +121,11 @@ export default defineConfig(({ command }) => ({
     terserOptions: {
       mangle: false,
     },
-    rollupOptions: {},
+    rollupOptions: {
+      input: {
+        index: r("src/index.html"),
+      },
+    },
   },
   test: {
     globals: true,
