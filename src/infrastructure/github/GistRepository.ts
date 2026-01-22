@@ -91,41 +91,50 @@ export class GistRepository implements IGistRepository {
     files: Record<string, string | null>,
   ): Promise<void> {
     this.ensureAuth();
-    
+
     // Prepare payload
     const fileUpdates: Record<string, { content?: string } | null> = {};
     for (const [filename, content] of Object.entries(files)) {
       fileUpdates[filename] = content === null ? null : { content };
     }
-    
+
     const payload = {
-        description: NEXUS_GIST_DESCRIPTION, // Optional but good practice to keep desc updated
-        files: fileUpdates
+      description: NEXUS_GIST_DESCRIPTION, // Optional but good practice to keep desc updated
+      files: fileUpdates,
     };
 
-    console.log('[GistRepository] updateBatch (fetch) payload:', JSON.stringify(payload, null, 2));
+    console.log(
+      "[GistRepository] updateBatch (fetch) payload:",
+      JSON.stringify(payload, null, 2),
+    );
 
     try {
       const response = await fetch(`https://api.github.com/gists/${gistId}`, {
-          method: 'PATCH',
-          headers: {
-              'Authorization': `token ${this._token}`,
-              'Accept': 'application/vnd.github.v3+json',
-              'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(payload)
+        method: "PATCH",
+        headers: {
+          Authorization: `token ${this._token}`,
+          Accept: "application/vnd.github.v3+json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
       });
 
       if (!response.ok) {
-          const errorText = await response.text();
-          console.error('[GistRepository] Fetch Error:', response.status, errorText);
-          throw new Error(`Gist Update Failed: ${response.status} ${response.statusText}`);
+        const errorText = await response.text();
+        console.error(
+          "[GistRepository] Fetch Error:",
+          response.status,
+          errorText,
+        );
+        throw new Error(
+          `Gist Update Failed: ${response.status} ${response.statusText}`,
+        );
       }
-      
-      console.log('[GistRepository] Update successful');
+
+      console.log("[GistRepository] Update successful");
     } catch (e: any) {
-        console.error('Gist Update Failed:', e.message)
-        throw e
+      console.error("Gist Update Failed:", e.message);
+      throw e;
     }
   }
 
@@ -134,7 +143,7 @@ export class GistRepository implements IGistRepository {
     filename: string,
     content: string | null,
   ): Promise<void> {
-    return this.updateBatch(gistId, { [filename]: content })
+    return this.updateBatch(gistId, { [filename]: content });
   }
 
   /**
@@ -145,49 +154,106 @@ export class GistRepository implements IGistRepository {
     gistId: string,
     oldFilename: string,
     newFilename: string,
-    content: string
+    content: string,
   ): Promise<void> {
     // 一次 PATCH 请求同时删除旧文件 + 创建新文件
     return this.updateBatch(gistId, {
-      [oldFilename]: null,      // 删除旧文件
-      [newFilename]: content    // 创建新文件
-    })
+      [oldFilename]: null, // 删除旧文件
+      [newFilename]: content, // 创建新文件
+    });
   }
 
   async getGistContent(gistId: string): Promise<Record<string, GistFile>> {
     this.ensureAuth();
-    const { data } = await this.octokit!.rest.gists.get({ gist_id: gistId });
 
-    const result: Record<string, GistFile> = {};
+    // 使用 GraphQL 获取 Gist 内容，不包含历史记录
+    // 注意：GraphQL ID 和 REST ID 不同，但可以通过 viewer.gist(name: "REST_ID") 或 resource(url: "...") 获取
+    // 这里我们尝试通过 viewer.gist 查询，如果不仅是自己的 Gist，可能需要 adjustments。
+    // 更稳妥的方式是使用 REST API v3 的 id (即 name)
 
-    if (data.files) {
-      for (const [filename, fileObj] of Object.entries(data.files)) {
-        const file = fileObj as GithubGistFile;
-        // 确保 file 存在且未被截断（或者我们接受截断，视需求而定，这里保持原逻辑）
-        if (file && !file.truncated) {
-          // ...
-          result[filename] = {
-            id: filename,
-            filename: filename,
-            content: file.content || "",
-            language: file.language || undefined,
-            updated_at: data.updated_at,
-          };
+    // Fallback to REST if complex, but here we want to avoid history.
+    // The query below fetches the gist by name (which corresponds to the ID in REST)
+
+    const query = `
+      query($name: String!) {
+        viewer {
+          gist(name: $name) {
+            updatedAt
+            files {
+              name
+              text
+            }
+          }
         }
       }
-    }
+    `;
 
-    return result;
+    try {
+      // Octokit v5+ supports .graphql
+      const response: any = await this.octokit!.graphql(query, {
+        name: gistId,
+      });
+
+      const gist = response.viewer.gist;
+      if (!gist) {
+        throw new Error("Gist not found via GraphQL");
+      }
+
+      const result: Record<string, GistFile> = {};
+
+      if (gist.files) {
+        for (const file of gist.files) {
+          if (file) {
+            result[file.name] = {
+              id: file.name,
+              filename: file.name,
+              content: file.text || "",
+              // GraphQL doesn't strictly return language in simple File object mostly,
+              // but we can live without it or add fields if schema supports.
+              // File type in GraphQL: name, text, language { name }, encodedName, etc.
+              // Let's keep it simple.
+              updated_at: gist.updatedAt,
+            };
+          }
+        }
+      }
+      return result;
+    } catch (e) {
+      console.warn(
+        "GraphQL fetch failed, falling back to REST (with history overhead)",
+        e,
+      );
+      // Fallback to original REST implementation if GraphQL fails (e.g. scopes issues)
+      const { data } = await this.octokit!.rest.gists.get({ gist_id: gistId });
+      const result: Record<string, GistFile> = {};
+      if (data.files) {
+        for (const [filename, fileObj] of Object.entries(data.files)) {
+          const file = fileObj as GithubGistFile;
+          if (file && !file.truncated) {
+            result[filename] = {
+              id: filename,
+              filename: filename,
+              content: file.content || "",
+              language: file.language || undefined,
+              updated_at: data.updated_at,
+            };
+          }
+        }
+      }
+      return result;
+    }
   }
 
-  // 获取版本历史
+  // 获取版本历史 (使用 REST API 分页获取 commit 列表，而非 get Gist 详情)
   async getGistHistory(gistId: string): Promise<GistHistoryEntry[]> {
     this.ensureAuth();
-    const { data } = await this.octokit!.rest.gists.get({ gist_id: gistId });
+    // 使用 listCommits 获取历史，避免获取完整内容
+    const { data } = await this.octokit!.rest.gists.listCommits({
+      gist_id: gistId,
+      per_page: 30,
+    });
 
-    if (!data.history) return [];
-
-    return data.history.map((h: any) => ({
+    return data.map((h: any) => ({
       version: h.version,
       committedAt: h.committed_at,
       changeStatus: {
