@@ -89,7 +89,7 @@ export class GistRepository implements IGistRepository {
   async updateBatch(
     gistId: string,
     files: Record<string, string | null>,
-  ): Promise<void> {
+  ): Promise<string> {
     this.ensureAuth();
 
     // Prepare payload
@@ -131,7 +131,12 @@ export class GistRepository implements IGistRepository {
         );
       }
 
-      console.log("[GistRepository] Update successful");
+      const data = await response.json();
+      console.log(
+        "[GistRepository] Update successful, new updated_at:",
+        data.updated_at,
+      );
+      return data.updated_at;
     } catch (e: any) {
       console.error("Gist Update Failed:", e.message);
       throw e;
@@ -142,7 +147,7 @@ export class GistRepository implements IGistRepository {
     gistId: string,
     filename: string,
     content: string | null,
-  ): Promise<void> {
+  ): Promise<string> {
     return this.updateBatch(gistId, { [filename]: content });
   }
 
@@ -155,7 +160,7 @@ export class GistRepository implements IGistRepository {
     oldFilename: string,
     newFilename: string,
     content: string,
-  ): Promise<void> {
+  ): Promise<string> {
     // 一次 PATCH 请求同时删除旧文件 + 创建新文件
     return this.updateBatch(gistId, {
       [oldFilename]: null, // 删除旧文件

@@ -1,34 +1,34 @@
 # Project Nexus
 
-**System Role**: Distributed Configuration Command Center
-**Architecture Pattern**: Clean Architecture / Local-First / Domain-Driven Design
-**Primary Store**: GitHub Gist (Private)
-**Local Cache**: IndexedDB (Dexie.js)
+**系统角色**: 分布式配置指挥中心
+**架构模式**: 整洁架构 (Clean Architecture) / 本地优先 (Local-First) / 领域驱动设计 (DDD)
+**主存储**: GitHub Gist (私有)
+**本地缓存**: IndexedDB (Dexie.js)
 
 ---
 
-## 🏗️ Architecture Overview
+## 🏗️ 架构概览
 
-The system strictly adheres to **Clean Architecture** principles, separating business logic from UI and infrastructure.
+本系统严格遵循 **整洁架构** 原则，将业务逻辑与 UI 及基础设施分离。
 
 ```mermaid
 graph TD
-    subgraph "Presentation Layer (Vue/Pinia)"
+    subgraph "表现层 (Vue/Pinia)"
         Store[useNexusStore]
     end
 
-    subgraph "Application Layer (Core)"
+    subgraph "应用层 (Core Application)"
         SyncService[SyncService]
         FileService[FileService]
-        PortRepo[Interfaces/Ports]
+        PortRepo[接口/端口]
     end
 
-    subgraph "Domain Layer (Core)"
+    subgraph "领域层 (Core Domain)"
         Entity[NexusFile / NexusIndex]
         DomainSvc[LanguageRegistry]
     end
 
-    subgraph "Infrastructure Layer"
+    subgraph "基础设施层 (Infrastructure)"
         GistRepo[GistRepository]
         LocalRepo[LocalStoreRepository]
         FileAdapter[LocalFileRepository]
@@ -41,82 +41,100 @@ graph TD
     FileService --> PortRepo
     SyncService --> Entity
     FileService --> Entity
-    GistRepo -- implements --> PortRepo
-    LocalRepo -- implements --> PortRepo
-    FileAdapter -- implements --> PortRepo
+    GistRepo -- 实现 --> PortRepo
+    LocalRepo -- 实现 --> PortRepo
+    FileAdapter -- 实现 --> PortRepo
     FileAdapter --> DB
 ```
 
 ---
 
-## 📂 Directory Structure
+## 📂 目录结构
 
 ```text
 src/
-├── core/                     # [Inner Ring] Pure TypeScript, Framework-agnostic
-│   ├── domain/               # Enterprise Business Rules
-│   │   ├── entities/         # Rich Models (NexusFile)
-│   │   ├── services/         # Domain Services (LanguageRegistry)
-│   │   └── shared/           # Shared Kernels (IdGenerator)
-│   └── application/          # Application Business Rules
-│       ├── ports/            # Repository Interfaces (IGistRepository, IFileRepository)
-│       └── services/         # Use Cases (SyncService, FileService)
+├── core/                     # [内环] 纯 TypeScript，无关框架
+│   ├── domain/               # 企业级业务规则
+│   │   ├── entities/         # 充血模型 (NexusFile)
+│   │   ├── services/         # 领域服务 (LanguageRegistry)
+│   │   └── shared/           # 共享内核 (IdGenerator)
+│   └── application/          # 应用业务规则
+│       ├── ports/            # 仓储接口 (IGistRepository, IFileRepository)
+│       └── services/         # 用例 (SyncService, FileService)
 │
-├── infrastructure/           # [Outer Ring] Adapters & Implementations
-│   ├── db/                   # Local Persistence (Dexie)
-│   ├── github/               # External API (Octokit)
-│   └── storage/              # Configuration Storage (LocalStorage/Chrome Storage)
+├── infrastructure/           # [外环] 适配器与实现
+│   ├── db/                   # 本地持久化 (Dexie)
+│   ├── github/               # 外部 API (Octokit)
+│   └── storage/              # 配置存储 (LocalStorage/Chrome Storage)
 │
-├── stores/                   # [Presentation] State Management
-│   └── useNexusStore.ts      # ViewModel / Controller Logic
+├── stores/                   # [表现层] 状态管理
+│   └── useNexusStore.ts      # ViewModel / 控制器逻辑
 │
-└── services.ts               # Dependency Injection Container
+└── services.ts               # 依赖注入容器
 ```
 
 ---
 
-## 🧩 Core Concepts
+## 🧩 核心概念
 
-### Domain Layer
-*   **NexusFile**: The aggregate root for configuration files. Encapsulates logic for filename generation (`id` + `language` -> `filename`) and dirty state tracking.
-*   **LanguageRegistry**: Domain service producing standard file extensions from language identifiers.
+### 领域层 (Domain Layer)
 
-### Application Layer
-*   **SyncService**: ORCHESTRATOR for data synchronization.
-    *   *Strategy*: Smart Sync (Incremental Metadata Check -> Full Fetch).
-    *   *Conflict*: Timestamp-based detection.
-*   **FileService**: HANDLER for file operations.
-    *   *Flow*: Update Local DB -> Update In-Memory Index -> Async Push to Gist.
+- **NexusFile**: 配置文件的聚合根。封装了文件名生成逻辑 (`id` + `language` -> `filename`) 和脏状态跟踪。
+- **LanguageRegistry**: 领域服务，用于根据语言标识符生成标准文件扩展名。
 
-### Infrastructure Layer
-*   **GistRepository**: Implementation of `IGistRepository` using Octokit. Handles the complexity of Gist JSON mapping.
-*   **LocalFileRepository**: Implementation of `IFileRepository` using Dexie. Maps `NexusFile` entities to simpler database records.
+### 应用层 (Application Layer)
 
----
+- **SyncService**: 数据同步的 **编排者**。
+  - _策略_: 智能同步 (增量元数据检查 -> 全量拉取)。
+  - _冲突_: 基于时间戳的检测机制。
+- **FileService**: 文件操作的 **处理器**。
+  - _流程_: 更新本地 DB -> 更新内存索引 -> 异步推送到 Gist。
 
-## 🔄 Data Flow Patterns
+### 基础设施层 (Infrastructure Layer)
 
-### 1. Synchronization (Inbound)
-1.  **Check**: `SyncService` fetches Gist metadata (`updated_at`).
-2.  **Compare**: If remote > local, fetch full Gist content.
-3.  **Hydrate**: Parse JSON to `NexusIndex` and `NexusFile` entities.
-4.  **Persist**: Bulk save to `NexusDB` (Local Cache).
-
-### 2. File Modification (Outbound)
-1.  **Update**: User edits content -> `FileService` updates `NexusFile`.
-2.  **Persist**: Immediate save to `NexusDB`.
-3.  **Push**: Async call to `SyncService.pushFile` (optimistic update).
-
-### 3. Index Modification (Structure Change)
-1.  **Update**: User adds/renames file -> `NexusIndex` updated in memory.
-2.  **Push**: Critical `nexus_index.json` update pushed to Gist immediately to maintain consistency.
+- **GistRepository**: `IGistRepository` 的实现，使用 Octokit。处理 Gist JSON 映射的复杂性。
+- **LocalFileRepository**: `IFileRepository` 的实现，使用 Dexie。将 `NexusFile` 实体映射为简单的数据库记录。
 
 ---
 
-## 🛠️ Technology Stack
+## 🔄 数据流模式
 
-*   **Runtime**: Browser Extension / Web
-*   **Framework**: Vue 3 + Pinia
-*   **Language**: TypeScript 5.x
-*   **Persistence**: Dexie.js (IndexedDB wrapper)
-*   **Network**: Octokit (GitHub REST API)
+### 1. 同步 (入站/Inbound)
+
+1.  **检查**: `SyncService` 获取 Gist 元数据 (`updated_at`)。
+2.  **比较**: 如果远程时间 > 本地时间，则拉取完整 Gist 内容。
+3.  **水合**: 将 JSON 解析为 `NexusIndex` 和 `NexusFile` 实体。
+4.  **持久化**: 批量保存到 `NexusDB` (本地缓存)。
+
+### 2. 文件修改 (出站/Outbound)
+
+1.  **更新**: 用户编辑内容 -> `FileService` 更新 `NexusFile`。
+2.  **持久化**: 立即保存到 `NexusDB`。
+3.  **推送**: 异步调用 `SyncService.pushFile` (乐观更新)。
+
+### 3. 索引修改 (结构变更)
+
+1.  **更新**: 用户添加/重命名文件 -> 内存中的 `NexusIndex` 更新。
+2.  **推送**: 关键的 `nexus_index.json` 更新会立即推送到 Gist 以保持一致性。
+
+---
+
+## 🛠️ 技术栈
+
+- **运行时**: 浏览器扩展 / Web
+- **框架**: Vue 3 + Pinia
+- **语言**: TypeScript 5.x
+- **持久化**: Dexie.js (IndexedDB 封装)
+- **网络**: Octokit (GitHub REST API)
+
+---
+
+## 🔧 脚本
+
+### 手动验证
+
+验证 Gist API 的功能和性能：
+
+```bash
+npx esno scripts/manual_verify_gist.ts
+```
