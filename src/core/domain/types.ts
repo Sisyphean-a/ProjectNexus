@@ -30,6 +30,7 @@ export interface GistIndexItem {
   id: string;
   title: string;
   gist_file: string; // Filename in the Gist
+  language: string;  // 语言类型（决定扩展名和语法高亮）
   tags?: string[];
 }
 
@@ -58,6 +59,7 @@ export interface IGistRepository {
   getGistContent(gistId: string): Promise<Record<string, GistFile>>;
   // 版本历史方法
   getGistHistory(gistId: string): Promise<GistHistoryEntry[]>;
+  updateBatch(gistId: string, files: Record<string, string | null>): Promise<void>;
   getGistVersion(
     gistId: string,
     sha: string,

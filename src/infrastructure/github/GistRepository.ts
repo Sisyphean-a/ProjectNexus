@@ -12,12 +12,14 @@ const NEXUS_INDEX_FILENAME = "nexus_index.json";
 
 export class GistRepository implements IGistRepository {
   private octokit: Octokit | null = null;
+  private _token: string | null = null;
 
   async verifyToken(token: string): Promise<boolean> {
     try {
       const octokit = new Octokit({ auth: token });
       const { data } = await octokit.rest.users.getAuthenticated();
       this.octokit = octokit;
+      this._token = token;
       return !!data.login;
     } catch (e) {
       console.error("Token verification failed", e);
@@ -26,12 +28,14 @@ export class GistRepository implements IGistRepository {
   }
 
   private ensureAuth() {
-    if (!this.octokit) {
+    if (!this.octokit || !this._token) {
       throw new Error(
         "GistRepository not authenticated. Call verifyToken first.",
       );
     }
   }
+
+  // ... (fetchGist, findNexusGist, createNexusGist remain unchanged)
 
   async fetchGist(gistId: string): Promise<any> {
     this.ensureAuth();
@@ -42,17 +46,12 @@ export class GistRepository implements IGistRepository {
   async findNexusGist(): Promise<string | null> {
     this.ensureAuth();
     try {
-      // List all gists for the user
-      // Note: This returns up to 30 by default, might need pagination for heavy users...
-      // But assuming nexus gist is recent or we iterate a bit.
       const { data } = await this.octokit!.rest.gists.list();
-
       const gist = data.find(
         (g) =>
           g.description === NEXUS_GIST_DESCRIPTION ||
           (g.files && g.files[NEXUS_INDEX_FILENAME]),
       );
-
       return gist ? gist.id : null;
     } catch (e) {
       console.error("Failed to find Nexus Gist", e);
@@ -77,28 +76,72 @@ export class GistRepository implements IGistRepository {
     return data.id!;
   }
 
+  async updateBatch(
+    gistId: string,
+    files: Record<string, string | null>,
+  ): Promise<void> {
+    this.ensureAuth();
+    
+    // Prepare payload
+    const fileUpdates: Record<string, { content?: string } | null> = {};
+    for (const [filename, content] of Object.entries(files)) {
+      fileUpdates[filename] = content === null ? null : { content };
+    }
+    
+    const payload = {
+        description: NEXUS_GIST_DESCRIPTION, // Optional but good practice to keep desc updated
+        files: fileUpdates
+    };
+
+    console.log('[GistRepository] updateBatch (fetch) payload:', JSON.stringify(payload, null, 2));
+
+    try {
+      const response = await fetch(`https://api.github.com/gists/${gistId}`, {
+          method: 'PATCH',
+          headers: {
+              'Authorization': `token ${this._token}`,
+              'Accept': 'application/vnd.github.v3+json',
+              'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+          const errorText = await response.text();
+          console.error('[GistRepository] Fetch Error:', response.status, errorText);
+          throw new Error(`Gist Update Failed: ${response.status} ${response.statusText}`);
+      }
+      
+      console.log('[GistRepository] Update successful');
+    } catch (e: any) {
+        console.error('Gist Update Failed:', e.message)
+        throw e
+    }
+  }
+
   async updateGistFile(
     gistId: string,
     filename: string,
     content: string | null,
   ): Promise<void> {
-    this.ensureAuth();
-    // If content is null, setting it to null interface in octokit deletes it?
-    // Actually Octokit expects explicit null or undefined to ignore, empty string?
-    // According to Gist API, key with null value deletes the file.
-    // However octokit types might be strict. We'll cast to any if needed or use proper type.
+    return this.updateBatch(gistId, { [filename]: content })
+  }
 
-    // Using string | null.
-    // Note: Gist API requires an object mapping filenames to { content: ... }
-
-    const files: Record<string, { content?: string } | null> = {
-      [filename]: content === null ? null : { content },
-    };
-
-    await this.octokit!.rest.gists.update({
-      gist_id: gistId,
-      files: files as any, // Cast to any because octokit types for delete (null) can be tricky
-    });
+  /**
+   * 重命名 Gist 文件
+   * GitHub Gist 不支持直接重命名，需要在一次 PATCH 中同时删除旧文件和创建新文件
+   */
+  async renameFile(
+    gistId: string,
+    oldFilename: string,
+    newFilename: string,
+    content: string
+  ): Promise<void> {
+    // 一次 PATCH 请求同时删除旧文件 + 创建新文件
+    return this.updateBatch(gistId, {
+      [oldFilename]: null,      // 删除旧文件
+      [newFilename]: content    // 创建新文件
+    })
   }
 
   async getGistContent(gistId: string): Promise<Record<string, GistFile>> {
