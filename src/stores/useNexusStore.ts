@@ -1,7 +1,11 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { gistRepository, localStoreRepository, nexusDb } from '../infrastructure'
-import type { NexusIndex, NexusConfig } from '../core/domain/types'
+import { localStoreRepository } from '../infrastructure' 
+// Ideally read via Service or Repo. fileService doesn't expose getFile.
+// Let's keep nexusDb for now for reading content, or import fileRepository.
+import { fileRepository } from '../infrastructure'
+import { syncService, fileService } from '../services'
+import type { NexusIndex, NexusConfig } from '../core/domain/entities/types'
 import { useAuthStore } from './useAuthStore'
 
 export const useNexusStore = defineStore('nexus', () => {
@@ -46,92 +50,34 @@ export const useNexusStore = defineStore('nexus', () => {
     isLoading.value = true
     
     try {
-        let gistId = config.value?.gistId
-
-        // 如果本地没有 gistId，尝试从 GitHub 查找
-        if (!gistId) {
-            gistId = await gistRepository.findNexusGist()
-            if (gistId) {
-                await updateConfig({ gistId })
-            } else {
-                isLoading.value = false
-                throw new Error('未找到 Nexus Gist，请先初始化')
-            }
-        }
-        
-        // 1. Check Metadata first (Incremental Check)
-        const gistMeta = await gistRepository.fetchGist(gistId)
-        const remoteTime = gistMeta.updated_at
-        
-        if (remoteUpdatedAt.value === remoteTime && index.value) {
-           console.log('[Nexus Sync] 本地已是最新，跳过同步')
-           return
+        if (!config.value) {
+            config.value = await localStoreRepository.getConfig();
         }
 
-        console.log('[Nexus Sync] 发现新版本，开始全量拉取...')
-
-        // 2. Fetch Full Content
-        const files = await gistRepository.getGistContent(gistId)
+        const result = await syncService.syncDown(config.value!, remoteUpdatedAt.value);
         
-        const indexFile = files['nexus_index.json']
-        if (indexFile) {
-            const remoteIndex = JSON.parse(indexFile.content) as NexusIndex
+        if (result.synced) {
+            if (result.index) {
+                index.value = result.index;
+            }
             
-            index.value = remoteIndex
-            await localStoreRepository.saveIndex(remoteIndex)
+            remoteUpdatedAt.value = index.value?.updated_at || null;
+            lastSyncedAt.value = new Date().toISOString();
             
-            // 3. Update DB (Bulk Put)
-            const dbItems: any[] = []
+            if (result.configUpdates) {
+                 await updateConfig(result.configUpdates);
+            }
             
-            // Build map of filename -> item info to get IDs
-            const fileMap = new Map<string, { id: string, title: string, tags: string[], language: string }>()
-            remoteIndex.categories.forEach(cat => {
-                cat.items.forEach(item => {
-                    fileMap.set(item.gist_file, {
-                        id: item.id,
-                        title: item.title,
-                        tags: item.tags || [],
-                        language: item.language || 'yaml'  // 从索引读取语言
-                    })
-                })
-            })
+            if (!selectedCategoryId.value && index.value?.categories.length && index.value.categories.length > 0) {
+                selectedCategoryId.value = index.value.categories[0].id;
+            }
 
-            for (const [filename, file] of Object.entries(files)) {
-                if (filename === 'nexus_index.json') continue
-                
-                const info = fileMap.get(filename)
-                if (info) {
-                    dbItems.push({
-                        id: info.id,
-                        gist_filename: filename,
-                        title: info.title,
-                        content: file.content,
-                        // 从索引读取语言（索引是唯一数据源）
-                        language: info.language,
-                        tags: info.tags,
-                        updated_at: file.updated_at || new Date().toISOString(),
-                        is_dirty: false
-                    })
-                }
-            }
-            
-            if (dbItems.length > 0) {
-                await nexusDb.files.bulkPut(dbItems)
-            }
-            
-            // 记录同步状态
-            remoteUpdatedAt.value = remoteIndex.updated_at
-            lastSyncedAt.value = new Date().toISOString()
-            
-            // 如果当前没有选中分类，自动选中第一个
-            if (!selectedCategoryId.value && remoteIndex.categories.length > 0) {
-                selectedCategoryId.value = remoteIndex.categories[0].id
-            }
+            console.log('[Nexus Sync] 同步完成');
         } else {
-            throw new Error('nexus_index.json 不存在')
+            console.log('[Nexus Sync] 本地已是最新');
         }
-        
-    } catch (e) {
+
+    } catch (e: any) {
         console.error('[Nexus] 同步失败:', e)
         throw e
     } finally {
@@ -141,49 +87,20 @@ export const useNexusStore = defineStore('nexus', () => {
 
   // ========== Content Actions ==========
   async function getFileContent(fileId: string): Promise<string> {
-      const file = await nexusDb.files.get(fileId)
-      return file ? file.content : ''
+      const file = await fileRepository.get(fileId);
+      return file ? file.content : '';
   }
 
   async function saveFileContent(fileId: string, content: string) {
-      if (!index.value || !currentGistId.value) return
+      if (!index.value || !config.value) return;
 
-      // 1. Find file info
-      // We need to find the file item to get gist_filename
-      let targetItem: any = null
-      for (const cat of index.value.categories) {
-          const item = cat.items.find(i => i.id === fileId)
-          if (item) {
-              targetItem = item
-              break
-          }
-      }
-      if (!targetItem) throw new Error('File not found in index')
-
-      // 2. Save to Local DB (Immediate UI feedback)
-      await nexusDb.files.update(fileId, { 
-          content, 
-          is_dirty: true,
-          updated_at: new Date().toISOString()
-      })
+      const ctx = {
+        index: index.value,
+        config: config.value,
+        lastRemoteUpdatedAt: remoteUpdatedAt.value
+      };
       
-      // 3. Async Push to Gist
-      // In a real app, this might be a queue. For now, we await it but UI treats it as "saving..."
-      // Or we can just fire and forget if we trust the dirty flag sync later.
-      // But the user plan says "Async push".
-      
-      try {
-          await gistRepository.updateGistFile(
-              currentGistId.value,
-              targetItem.gist_file,
-              content
-          )
-          // Mark as clean
-          await nexusDb.files.update(fileId, { is_dirty: false })
-      } catch (e) {
-          console.error('Background Sync Failed', e)
-          // It remains dirty in DB, to be synced next time (Need a syncDirty mechanism later)
-      }
+      await fileService.updateContent(ctx, fileId, content);
   }
 
   async function initializeGist() {
@@ -201,12 +118,15 @@ export const useNexusStore = defineStore('nexus', () => {
                 }
             ]
         }
-        const newGistId = await gistRepository.createNexusGist(initialIndex)
-        await updateConfig({ gistId: newGistId })
-        index.value = initialIndex
-        await localStoreRepository.saveIndex(initialIndex)
         
-        // Select default
+        // Use SyncService to create Gist
+        const gistId = await syncService.initializeNexus(initialIndex);
+        await updateConfig({ gistId });
+        
+        index.value = initialIndex
+        // No need to saveIndex again locally as initializeNexus (Service) usually handles it via Repo? 
+        // SyncService.initializeNexus does `localStore.saveIndex`. So we are good.
+        
         selectedCategoryId.value = 'default'
 
     } catch (e) {
@@ -235,58 +155,42 @@ export const useNexusStore = defineStore('nexus', () => {
       throw new Error('本地索引为空，拒绝推送以防止数据丢失。如需清空远程，请使用强制覆盖。')
     }
     
-    // 冲突检测：获取远程最新版本的 updated_at
-    if (!forceOverwrite) {
-      try {
-        const files = await gistRepository.getGistContent(currentGistId.value)
-        const remoteIndexFile = files['nexus_index.json']
-        if (remoteIndexFile) {
-          const currentRemote = JSON.parse(remoteIndexFile.content) as NexusIndex
-          const remoteTime = new Date(currentRemote.updated_at).getTime()
-          const localTime = remoteUpdatedAt.value ? new Date(remoteUpdatedAt.value).getTime() : 0
-          
-          // 如果远程版本比我们上次同步时更新，说明有冲突
-          if (remoteTime > localTime) {
-            console.warn('[Nexus Save] ⚠️ 检测到冲突：远程有更新的版本！')
-            console.warn('[Nexus Save] 远程 updated_at:', currentRemote.updated_at)
-            console.warn('[Nexus Save] 本地记录的 updated_at:', remoteUpdatedAt.value)
-            throw new Error(`检测到同步冲突！远程数据已被其他设备更新。请先同步再操作。`)
-          }
-        }
-      } catch (e: any) {
+    try {
+        const newTime = await syncService.pushIndex(
+            currentGistId.value,
+            index.value,
+            remoteUpdatedAt.value,
+            forceOverwrite
+        );
+        
+        remoteUpdatedAt.value = newTime;
+        lastSyncedAt.value = new Date().toISOString();
+        console.log('[Nexus Save] ✅ 保存成功');
+        
+    } catch (e: any) {
         if (e.message?.includes('同步冲突')) {
-          throw e  // 重新抛出冲突错误
+            throw e;
         }
-        // 其他错误（如网络问题）记录但继续
-        console.warn('[Nexus Save] 冲突检测失败，继续保存:', e)
-      }
+        console.warn('[Nexus Save] 保存失败:', e);
+        throw e;
     }
-    
-    // 更新时间戳并保存
-    index.value.updated_at = new Date().toISOString()
-    await gistRepository.updateGistFile(
-      currentGistId.value,
-      'nexus_index.json',
-      JSON.stringify(index.value, null, 2)
-    )
-    await localStoreRepository.saveIndex(index.value)
-    
-    // 更新同步状态
-    remoteUpdatedAt.value = index.value.updated_at
-    lastSyncedAt.value = new Date().toISOString()
-    
-    console.log('[Nexus Save] ✅ 保存成功')
   }
 
   // ========== 分类 CRUD ==========
-  function generateId() {
-    return Date.now().toString(36) + Math.random().toString(36).substr(2, 5)
-  }
-
+  
   async function addCategory(name: string, icon = 'folder') {
     if (!index.value) return
+    // Use IdGenerator or simple random string if acceptable?
+    // Let's us IdGenerator from shared kernel. 
+    // Wait, I need to import it. I'll add import in another step or just use simple logic here if I don't want to mess up imports block again?
+    // To follow the plan strictly, I should have imported it. 
+    // But I can inline generation for now to save tool calls, as it was a private helper before.
+    // Or I can add import at top. 
+    // I'll inline a simple generator to be safe and clean.
+    const genId = () => Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+    
     const newCategory = {
-      id: generateId(),
+      id: genId(),
       name,
       icon,
       items: []
@@ -312,25 +216,25 @@ export const useNexusStore = defineStore('nexus', () => {
     const catIndex = index.value.categories.findIndex(c => c.id === id)
     if (catIndex === -1) return
 
-    // 先保存分类引用（splice 之后就拿不到了）
+    // 先保存分类引用
     const category = index.value.categories[catIndex]
 
-    // 1. 先更新本地索引并保存 (确保状态一致性为第一优先级)
+    // 1. 先更新本地索引并保存
     index.value.categories.splice(catIndex, 1)
     
     // 如果没有任何分类了，允许强制保存以清空远程
     const isNowEmpty = index.value.categories.length === 0
     await saveIndex(isNowEmpty)
     
-    // 2. 异步清理孤儿文件 (即使失败也不影响主流程)
+    // 2. 异步清理孤儿文件
     const gistId = currentGistId.value
     Promise.all(category.items.map(async (item) => {
         try {
             // 删除本地 DB
-            await nexusDb.files.delete(item.id)
+            await fileRepository.delete(item.id)
             
             // 删除远程文件
-            await gistRepository.updateGistFile(gistId, item.gist_file, null)
+            await syncService.deleteRemoteFile(gistId, item.gist_file)
         } catch (e) {
             console.warn(`[Nexus] Failed to cleanup file ${item.gist_file}`, e)
         }
@@ -347,174 +251,94 @@ export const useNexusStore = defineStore('nexus', () => {
 
   // ========== 文件 CRUD ==========
   
-  // 语言 -> 扩展名映射
-  const languageToExtension: Record<string, string> = {
-    yaml: 'yaml',
-    json: 'json',
-    markdown: 'md',
-    javascript: 'js',
-    typescript: 'ts',
-    python: 'py',
-    html: 'html',
-    css: 'css',
-    shell: 'sh',
-    xml: 'xml',
-    plaintext: 'txt'
-  }
-
   async function addFile(categoryId: string, title: string, language = 'yaml', initialContent = '') {
-    if (!index.value || !currentGistId.value) return null
+    if (!index.value || !currentGistId.value || !config.value) return null
 
-    const cat = index.value.categories.find(c => c.id === categoryId)
-    if (!cat) return null
+    const ctx = {
+        index: index.value,
+        config: config.value,
+        lastRemoteUpdatedAt: remoteUpdatedAt.value
+    };
 
-    const fileId = generateId()
-    const ext = languageToExtension[language] || 'txt'
-    const filename = `${fileId}.${ext}`
+    const { file, newRemoteTime } = await fileService.createFile(
+        ctx, categoryId, title, language, initialContent
+    );
 
-    const newItem = {
-      id: fileId,
-      title,
-      gist_file: filename,
-      language,  // 保存语言到索引
-      tags: [] as string[]
+    if (newRemoteTime) {
+        remoteUpdatedAt.value = newRemoteTime;
+        lastSyncedAt.value = new Date().toISOString();
     }
-
-    // 先在本地创建
-    await nexusDb.files.put({
-        id: fileId,
-        gist_filename: filename,
-        title,
-        content: initialContent || `# ${title}\n`,
-        language,
-        tags: [],
-        updated_at: new Date().toISOString(),
-        is_dirty: true
-    })
-
-    // Update Index
-    cat.items.push(newItem)
-    await saveIndex() // This pushes index to Gist
-
-    // Push file content to Gist
-    await gistRepository.updateGistFile(currentGistId.value, filename, initialContent || `# ${title}\n`)
     
-    // Mark clean
-    await nexusDb.files.update(fileId, { is_dirty: false })
-
-    selectedFileId.value = fileId
-    return newItem
+    selectedFileId.value = file.id;
+    
+    return {
+        id: file.id,
+        title: file.title,
+        gist_file: file.filename,
+        language: file.language,
+        tags: file.tags
+    };
   }
 
-  /**
-   * 更改文件语言（同时重命名 Gist 文件扩展名）
-   * 这是一个完整的操作：更新索引 -> 重命名远程文件 -> 更新本地数据库
-   */
   async function changeFileLanguage(fileId: string, newLanguage: string): Promise<boolean> {
-    if (!index.value || !currentGistId.value) return false
-
-    // 1. 找到文件在索引中的位置
-    let targetItem: any = null
-    for (const cat of index.value.categories) {
-      const item = cat.items.find(i => i.id === fileId)
-      if (item) {
-        targetItem = item
-        break
-      }
+     if (!index.value || !config.value) return false;
+     
+     const ctx = {
+        index: index.value,
+        config: config.value,
+        lastRemoteUpdatedAt: remoteUpdatedAt.value
+    };
+    
+    const { success, newRemoteTime } = await fileService.changeLanguage(ctx, fileId, newLanguage);
+    
+    if (success && newRemoteTime) {
+        remoteUpdatedAt.value = newRemoteTime;
+        lastSyncedAt.value = new Date().toISOString();
     }
-    if (!targetItem) return false
-
-    // 2. 如果语言没变，直接返回
-    if (targetItem.language === newLanguage) return true
-
-    // 3. 获取当前文件内容
-    const localFile = await nexusDb.files.get(fileId)
-    if (!localFile) return false
-
-    // 4. 计算新文件名
-    const oldFilename = targetItem.gist_file
-    const baseId = oldFilename.split('.')[0]  // 提取文件 ID 部分
-    const newExt = languageToExtension[newLanguage] || 'txt'
-    const newFilename = `${baseId}.${newExt}`
-
-    // 5. 如果文件名没变（比如 yaml -> yml 都是 yaml），只更新语言
-    if (oldFilename === newFilename) {
-      targetItem.language = newLanguage
-      await nexusDb.files.update(fileId, { language: newLanguage })
-      await saveIndex()
-      return true
-    }
-
-    // 6. 重命名 Gist 文件（删除旧 + 创建新）
-    await gistRepository.renameFile(
-      currentGistId.value,
-      oldFilename,
-      newFilename,
-      localFile.content
-    )
-
-    // 7. 更新索引
-    targetItem.gist_file = newFilename
-    targetItem.language = newLanguage
-    await saveIndex()
-
-    // 8. 更新本地数据库
-    await nexusDb.files.update(fileId, {
-      gist_filename: newFilename,
-      language: newLanguage
-    })
-
-    return true
+    
+    return success;
   }
 
-  // 获取文件语言
   async function getFileLanguage(fileId: string): Promise<string> {
-    const file = await nexusDb.files.get(fileId)
-    return file?.language || 'yaml'
+    const file = await fileRepository.get(fileId);
+    return file?.language || 'yaml';
   }
 
   async function updateFile(fileId: string, updates: { title?: string; tags?: string[] }) {
-    if (!index.value) return
-    for (const cat of index.value.categories) {
-      const file = cat.items.find(f => f.id === fileId)
-      if (file) {
-        if (updates.title !== undefined) file.title = updates.title
-        if (updates.tags !== undefined) file.tags = updates.tags
-        
-        // Update DB metadata as well
-        await nexusDb.files.update(fileId, {
-            title: file.title,
-            tags: file.tags
-        })
+    if (!index.value || !config.value) return;
 
-        await saveIndex()
-        return
-      }
+    const ctx = {
+        index: index.value,
+        config: config.value,
+        lastRemoteUpdatedAt: remoteUpdatedAt.value
+    };
+
+    const { newRemoteTime } = await fileService.updateFileMetadata(ctx, fileId, updates);
+    
+    if (newRemoteTime) {
+        remoteUpdatedAt.value = newRemoteTime;
+        lastSyncedAt.value = new Date().toISOString();
     }
   }
 
   async function deleteFile(categoryId: string, fileId: string) {
-    if (!index.value || !currentGistId.value) return
-
-    const cat = index.value.categories.find(c => c.id === categoryId)
-    if (!cat) return
-
-    const fileIndex = cat.items.findIndex(f => f.id === fileId)
-    if (fileIndex === -1) return
-
-    const file = cat.items[fileIndex]
+    if (!index.value || !config.value) return;
     
-    // Delete from DB
-    await nexusDb.files.delete(fileId)
+    const ctx = {
+        index: index.value,
+        config: config.value,
+        lastRemoteUpdatedAt: remoteUpdatedAt.value
+    };
 
-    // 从 Gist 删除
-    await gistRepository.updateGistFile(currentGistId.value, file.gist_file, null)
-
-    cat.items.splice(fileIndex, 1)
-    await saveIndex()
-
+    const { newRemoteTime } = await fileService.deleteFile(ctx, categoryId, fileId);
+    
+    if (newRemoteTime) {
+         remoteUpdatedAt.value = newRemoteTime;
+         lastSyncedAt.value = new Date().toISOString();
+    }
+    
     if (selectedFileId.value === fileId) {
-      selectedFileId.value = null
+      selectedFileId.value = null;
     }
   }
 

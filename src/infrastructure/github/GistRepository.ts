@@ -1,14 +1,24 @@
 import { Octokit } from "octokit";
+import type { IGistRepository } from "../../core/application/ports/IGistRepository";
 import type {
-  IGistRepository,
   GistFile,
   GistHistoryEntry,
   NexusIndex,
-} from "../../core/domain/types";
+} from "../../core/domain/entities/types";
 
 const NEXUS_GIST_DESCRIPTION =
   "Nexus Configuration Index - Do not edit manually if possible";
 const NEXUS_INDEX_FILENAME = "nexus_index.json";
+
+interface GithubGistFile {
+  filename?: string;
+  type?: string;
+  language?: string;
+  raw_url?: string;
+  size?: number;
+  truncated?: boolean;
+  content?: string;
+}
 
 export class GistRepository implements IGistRepository {
   private octokit: Octokit | null = null;
@@ -48,7 +58,7 @@ export class GistRepository implements IGistRepository {
     try {
       const { data } = await this.octokit!.rest.gists.list();
       const gist = data.find(
-        (g) =>
+        (g: any) =>
           g.description === NEXUS_GIST_DESCRIPTION ||
           (g.files && g.files[NEXUS_INDEX_FILENAME]),
       );
@@ -151,12 +161,11 @@ export class GistRepository implements IGistRepository {
     const result: Record<string, GistFile> = {};
 
     if (data.files) {
-      for (const [filename, file] of Object.entries(data.files)) {
+      for (const [filename, fileObj] of Object.entries(data.files)) {
+        const file = fileObj as GithubGistFile;
+        // 确保 file 存在且未被截断（或者我们接受截断，视需求而定，这里保持原逻辑）
         if (file && !file.truncated) {
-          // If truncated, we might need to fetch raw url. Gists < 1MB usually fine.
-          // Octokit usually fetches content if small enough.
-          // If content is missing but raw_url exists, we might need a separate fetch.
-          // For MVP, assuming content is present.
+          // ...
           result[filename] = {
             id: filename,
             filename: filename,
@@ -203,7 +212,8 @@ export class GistRepository implements IGistRepository {
     const result: Record<string, GistFile> = {};
 
     if (data.files) {
-      for (const [filename, file] of Object.entries(data.files)) {
+      for (const [filename, fileObj] of Object.entries(data.files)) {
+        const file = fileObj as GithubGistFile;
         if (file && !file.truncated) {
           result[filename] = {
             id: filename,
