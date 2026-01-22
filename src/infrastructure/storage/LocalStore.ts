@@ -1,8 +1,11 @@
-import type { ILocalStore, NexusConfig, NexusIndex } from '../../core/domain/types'
+import type { ILocalStore } from '../../core/application/ports/ILocalStore'
+import type { NexusConfig, NexusIndex } from '../../core/domain/entities/types'
 
 const CONFIG_KEY = 'nexus_config'
 const INDEX_KEY = 'nexus_index'
 const CACHE_PREFIX = 'nexus_cache_'
+
+declare const chrome: any;
 
 const defaultConfig: NexusConfig = {
   githubToken: '',
