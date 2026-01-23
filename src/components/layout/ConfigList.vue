@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from "vue";
+import { ref, computed, watch } from "vue";
 import { useNexusStore } from "../../stores/useNexusStore";
 import { useThemeStore } from "../../stores/useThemeStore";
 import {
@@ -72,6 +72,14 @@ const filteredList = computed(() => {
   const list = nexusStore.currentFileList;
   if (!searchQuery.value) return list;
   return fuse.value.search(searchQuery.value).map((result) => result.item);
+});
+
+// 监听模态框打开,使用分类默认语言
+watch(showAddModal, (newVal) => {
+  if (newVal) {
+    const category = nexusStore.currentCategory;
+    newFileLanguage.value = category?.defaultLanguage || "yaml";
+  }
 });
 
 function handleSelect(id: string) {
