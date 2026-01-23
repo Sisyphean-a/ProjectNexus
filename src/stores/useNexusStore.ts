@@ -27,7 +27,7 @@ export const useNexusStore = defineStore("nexus", () => {
   const selectedFileId = ref<string | null>(null);
 
   const currentCategory = computed(() => {
-    if (!index.value || !selectedCategoryId.value) return null;
+    if (!index.value || !Array.isArray(index.value.categories) || !selectedCategoryId.value) return null;
     return (
       index.value.categories.find((c) => c.id === selectedCategoryId.value) ||
       null
@@ -43,7 +43,18 @@ export const useNexusStore = defineStore("nexus", () => {
     config.value = await localStoreRepository.getConfig();
 
     // Attempt to load local index
-    index.value = await localStoreRepository.getIndex();
+    const localIndex = await localStoreRepository.getIndex();
+    // Validate integrity
+    if (localIndex && Array.isArray(localIndex.categories)) {
+      index.value = localIndex;
+    } else {
+      if (localIndex) {
+        console.warn(
+          "[Nexus Store] Found local index but it seems corrupted (missing categories). Ignored.",
+        );
+      }
+      index.value = null;
+    }
   }
 
   async function sync() {

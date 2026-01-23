@@ -184,7 +184,7 @@ export class GistRepository implements IGistRepository {
         viewer {
           gist(name: $name) {
             updatedAt
-            files {
+            files(limit: 300) {
               name
               text
             }
