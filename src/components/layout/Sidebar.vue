@@ -10,6 +10,7 @@ import {
   NInput,
   NModal,
   NSpace,
+  NSelect,
   useMessage,
   useDialog,
 } from "naive-ui";
@@ -22,6 +23,7 @@ const dialog = useDialog();
 // 新建分类模态框
 const showAddModal = ref(false);
 const newCategoryName = ref("");
+const newCategoryDefaultLanguage = ref("yaml");
 const isAdding = ref(false);
 
 // 右键菜单
@@ -30,10 +32,11 @@ const contextMenuX = ref(0);
 const contextMenuY = ref(0);
 const contextMenuCategoryId = ref<string | null>(null);
 
-// 重命名模态框
-const showRenameModal = ref(false);
-const renameCategoryName = ref("");
-const renameCategoryId = ref<string | null>(null);
+// 编辑分类模态框
+const showEditModal = ref(false);
+const editCategoryName = ref("");
+const editCategoryDefaultLanguage = ref("yaml");
+const editCategoryId = ref<string | null>(null);
 
 // 图标渲染
 const renderIcon = (iconName: string) => {
@@ -47,6 +50,21 @@ const renderIcon = (iconName: string) => {
   return () =>
     h("div", { class: `${iconMap[iconName] || "i-heroicons-folder"} w-5 h-5` });
 };
+
+// 语言选项
+const languageOptions = [
+  { label: "YAML", value: "yaml" },
+  { label: "JSON", value: "json" },
+  { label: "Markdown", value: "markdown" },
+  { label: "JavaScript", value: "javascript" },
+  { label: "TypeScript", value: "typescript" },
+  { label: "Python", value: "python" },
+  { label: "HTML", value: "html" },
+  { label: "CSS", value: "css" },
+  { label: "Shell", value: "shell" },
+  { label: "XML", value: "xml" },
+  { label: "纯文本", value: "plaintext" },
+];
 
 const menuOptions = computed(() => {
   if (!nexusStore.index) return [];
@@ -74,9 +92,14 @@ async function handleAddCategory() {
   }
   isAdding.value = true;
   try {
-    await nexusStore.addCategory(newCategoryName.value.trim());
+    await nexusStore.addCategory(
+      newCategoryName.value.trim(),
+      "folder",
+      newCategoryDefaultLanguage.value
+    );
     message.success("分类创建成功");
     newCategoryName.value = "";
+    newCategoryDefaultLanguage.value = "yaml";
   } catch (e) {
     message.error("创建失败");
   } finally {
@@ -99,7 +122,7 @@ function handleClickOutside() {
 }
 
 const contextMenuOptions = [
-  { label: "重命名", key: "rename" },
+  { label: "编辑分类", key: "rename" },
   { label: "删除", key: "delete" },
 ];
 
@@ -111,9 +134,10 @@ async function handleContextMenuSelect(key: string) {
   if (key === "rename") {
     const cat = nexusStore.index?.categories.find((c) => c.id === catId);
     if (cat) {
-      renameCategoryId.value = catId;
-      renameCategoryName.value = cat.name;
-      showRenameModal.value = true;
+      editCategoryId.value = catId;
+      editCategoryName.value = cat.name;
+      editCategoryDefaultLanguage.value = cat.defaultLanguage || "yaml";
+      showEditModal.value = true;
     }
   } else if (key === "delete") {
     const cat = nexusStore.index?.categories.find((c) => c.id === catId);
@@ -134,17 +158,18 @@ async function handleContextMenuSelect(key: string) {
   }
 }
 
-// 重命名
-async function handleRenameCategory() {
-  if (!renameCategoryName.value.trim() || !renameCategoryId.value) return;
+// 编辑分类
+async function handleEditCategory() {
+  if (!editCategoryName.value.trim() || !editCategoryId.value) return;
   try {
-    await nexusStore.updateCategory(renameCategoryId.value, {
-      name: renameCategoryName.value.trim(),
+    await nexusStore.updateCategory(editCategoryId.value, {
+      name: editCategoryName.value.trim(),
+      defaultLanguage: editCategoryDefaultLanguage.value,
     });
-    message.success("已重命名");
-    showRenameModal.value = false;
+    message.success("已保存");
+    showEditModal.value = false;
   } catch (e) {
-    message.error("重命名失败");
+    message.error("保存失败");
   }
 }
 
@@ -262,11 +287,18 @@ async function handleSync() {
 
     <!-- 新建分类模态框 -->
     <NModal v-model:show="showAddModal" preset="dialog" title="新建分类">
-      <NInput
-        v-model:value="newCategoryName"
-        placeholder="输入分类名称"
-        @keydown.enter="handleAddCategory"
-      />
+      <div class="space-y-4">
+        <NInput
+          v-model:value="newCategoryName"
+          placeholder="输入分类名称"
+          @keydown.enter="handleAddCategory"
+        />
+        <NSelect
+          v-model:value="newCategoryDefaultLanguage"
+          :options="languageOptions"
+          placeholder="选择默认语言"
+        />
+      </div>
       <template #action>
         <NSpace>
           <NButton @click="showAddModal = false">取消</NButton>
@@ -277,17 +309,24 @@ async function handleSync() {
       </template>
     </NModal>
 
-    <!-- 重命名模态框 -->
-    <NModal v-model:show="showRenameModal" preset="dialog" title="重命名分类">
-      <NInput
-        v-model:value="renameCategoryName"
-        placeholder="输入新名称"
-        @keydown.enter="handleRenameCategory"
-      />
+    <!-- 编辑分类模态框 -->
+    <NModal v-model:show="showEditModal" preset="dialog" title="编辑分类">
+      <div class="space-y-4">
+        <NInput
+          v-model:value="editCategoryName"
+          placeholder="输入分类名称"
+          @keydown.enter="handleEditCategory"
+        />
+        <NSelect
+          v-model:value="editCategoryDefaultLanguage"
+          :options="languageOptions"
+          placeholder="选择默认语言"
+        />
+      </div>
       <template #action>
         <NSpace>
-          <NButton @click="showRenameModal = false">取消</NButton>
-          <NButton type="primary" @click="handleRenameCategory">确定</NButton>
+          <NButton @click="showEditModal = false">取消</NButton>
+          <NButton type="primary" @click="handleEditCategory">保存</NButton>
         </NSpace>
       </template>
     </NModal>

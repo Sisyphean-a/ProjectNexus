@@ -34,6 +34,7 @@ export interface GistIndexCategory {
   id: string;
   name: string;
   icon?: string;
+  defaultLanguage?: string; // 分类默认语言
   items: GistIndexItem[];
 }
 

@@ -151,6 +151,7 @@ export const useNexusStore = defineStore("nexus", () => {
             id: "default",
             name: "General",
             icon: "folder",
+            defaultLanguage: "yaml",
             items: [],
           },
         ],
@@ -218,7 +219,7 @@ export const useNexusStore = defineStore("nexus", () => {
 
   // ========== 分类 CRUD ==========
 
-  async function addCategory(name: string, icon = "folder") {
+  async function addCategory(name: string, icon = "folder", defaultLanguage = "yaml") {
     console.log("[addCategory] 开始创建分类:", name);
 
     if (!index.value) {
@@ -246,6 +247,7 @@ export const useNexusStore = defineStore("nexus", () => {
       id: genId(),
       name,
       icon,
+      defaultLanguage,
       items: [],
     };
 
@@ -281,13 +283,14 @@ export const useNexusStore = defineStore("nexus", () => {
 
   async function updateCategory(
     id: string,
-    updates: { name?: string; icon?: string },
+    updates: { name?: string; icon?: string; defaultLanguage?: string },
   ) {
     if (!index.value) return;
     const cat = index.value.categories.find((c) => c.id === id);
     if (cat) {
       if (updates.name) cat.name = updates.name;
       if (updates.icon) cat.icon = updates.icon;
+      if (updates.defaultLanguage !== undefined) cat.defaultLanguage = updates.defaultLanguage;
       await saveIndex();
     }
   }
@@ -337,10 +340,14 @@ export const useNexusStore = defineStore("nexus", () => {
   async function addFile(
     categoryId: string,
     title: string,
-    language = "yaml",
+    language?: string,
     initialContent = "",
   ) {
     if (!index.value || !currentGistId.value || !config.value) return null;
+
+    // 获取分类默认语言
+    const category = index.value.categories.find(c => c.id === categoryId);
+    const finalLanguage = language || category?.defaultLanguage || "yaml";
 
     const ctx = {
       index: index.value,
@@ -352,7 +359,7 @@ export const useNexusStore = defineStore("nexus", () => {
       ctx,
       categoryId,
       title,
-      language,
+      finalLanguage,
       initialContent,
     );
 
