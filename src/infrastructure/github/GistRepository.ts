@@ -23,6 +23,11 @@ interface GithubGistFile {
 export class GistRepository implements IGistRepository {
   private octokit: Octokit | null = null;
   private _token: string | null = null;
+  public rateLimit = {
+    limit: 5000,
+    remaining: 5000,
+    resetAt: 0,
+  };
 
   async verifyToken(token: string): Promise<boolean> {
     try {
@@ -45,28 +50,57 @@ export class GistRepository implements IGistRepository {
     }
   }
 
+  private updateRateLimit(headers: Headers | any) {
+    const limit = headers.get ? headers.get("x-ratelimit-limit") : headers["x-ratelimit-limit"];
+    const remaining = headers.get ? headers.get("x-ratelimit-remaining") : headers["x-ratelimit-remaining"];
+    const reset = headers.get ? headers.get("x-ratelimit-reset") : headers["x-ratelimit-reset"];
+
+    if (limit) this.rateLimit.limit = parseInt(limit);
+    if (remaining) this.rateLimit.remaining = parseInt(remaining);
+    if (reset) this.rateLimit.resetAt = parseInt(reset) * 1000;
+  }
+
+  private async requestWithRetry<T>(
+    fn: () => Promise<T>,
+    retries = 3,
+    delay = 1000,
+  ): Promise<T> {
+    try {
+      return await fn();
+    } catch (e: any) {
+      const isRateLimit = e.status === 403 || e.status === 429;
+      if (isRateLimit && retries > 0) {
+        console.warn(`[GistRepository] Rate limited, retry in ${delay}ms...`, e.message);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        return this.requestWithRetry(fn, retries - 1, delay * 2);
+      }
+      throw e;
+    }
+  }
+
   // ... (fetchGist, findNexusGist, createNexusGist remain unchanged)
 
   async fetchGist(gistId: string): Promise<any> {
     this.ensureAuth();
-    const { data } = await this.octokit!.rest.gists.get({ gist_id: gistId });
-    return data;
+    return this.requestWithRetry(async () => {
+      const { data, headers } = await this.octokit!.rest.gists.get({ gist_id: gistId });
+      this.updateRateLimit(headers);
+      return data;
+    });
   }
 
   async findNexusGist(): Promise<string | null> {
     this.ensureAuth();
-    try {
-      const { data } = await this.octokit!.rest.gists.list();
+    return this.requestWithRetry(async () => {
+      const { data, headers } = await this.octokit!.rest.gists.list();
+      this.updateRateLimit(headers);
       const gist = data.find(
         (g: any) =>
           g.description === NEXUS_GIST_DESCRIPTION ||
           (g.files && g.files[NEXUS_INDEX_FILENAME]),
       );
       return gist ? gist.id : null;
-    } catch (e) {
-      console.error("Failed to find Nexus Gist", e);
-      return null;
-    }
+    });
   }
 
   async createNexusGist(initialIndex: NexusIndex): Promise<string> {
@@ -109,27 +143,24 @@ export class GistRepository implements IGistRepository {
     );
 
     try {
-      const response = await fetch(`https://api.github.com/gists/${gistId}`, {
-        method: "PATCH",
-        headers: {
-          Authorization: `token ${this._token}`,
-          Accept: "application/vnd.github.v3+json",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
+      const response = await this.requestWithRetry(async () => {
+        const res = await fetch(`https://api.github.com/gists/${gistId}`, {
+          method: "PATCH",
+          headers: {
+            Authorization: `token ${this._token}`,
+            Accept: "application/vnd.github.v3+json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+        this.updateRateLimit(res.headers);
+        if (!res.ok) {
+           const error: any = new Error(`Gist Update Failed: ${res.status}`);
+           error.status = res.status;
+           throw error;
+        }
+        return res;
       });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error(
-          "[GistRepository] Fetch Error:",
-          response.status,
-          errorText,
-        );
-        throw new Error(
-          `Gist Update Failed: ${response.status} ${response.statusText}`,
-        );
-      }
 
       const data = await response.json();
       console.log(
@@ -181,6 +212,11 @@ export class GistRepository implements IGistRepository {
 
     const query = `
       query($name: String!) {
+        rateLimit {
+          limit
+          remaining
+          resetAt
+        }
         viewer {
           gist(name: $name) {
             updatedAt
@@ -195,9 +231,15 @@ export class GistRepository implements IGistRepository {
 
     try {
       // Octokit v5+ supports .graphql
-      const response: any = await this.octokit!.graphql(query, {
+      const response: any = await this.requestWithRetry(() => this.octokit!.graphql(query, {
         name: gistId,
-      });
+      }));
+
+      if (response.rateLimit) {
+        this.rateLimit.limit = response.rateLimit.limit;
+        this.rateLimit.remaining = response.rateLimit.remaining;
+        this.rateLimit.resetAt = new Date(response.rateLimit.resetAt).getTime();
+      }
 
       const gist = response.viewer.gist;
       if (!gist) {
@@ -252,21 +294,23 @@ export class GistRepository implements IGistRepository {
   // 获取版本历史 (使用 REST API 分页获取 commit 列表，而非 get Gist 详情)
   async getGistHistory(gistId: string): Promise<GistHistoryEntry[]> {
     this.ensureAuth();
-    // 使用 listCommits 获取历史，避免获取完整内容
-    const { data } = await this.octokit!.rest.gists.listCommits({
-      gist_id: gistId,
-      per_page: 30,
-    });
+    return this.requestWithRetry(async () => {
+      const { data, headers } = await this.octokit!.rest.gists.listCommits({
+        gist_id: gistId,
+        per_page: 30,
+      });
+      this.updateRateLimit(headers);
 
-    return data.map((h: any) => ({
-      version: h.version,
-      committedAt: h.committed_at,
-      changeStatus: {
-        additions: h.change_status?.additions || 0,
-        deletions: h.change_status?.deletions || 0,
-        total: h.change_status?.total || 0,
-      },
-    }));
+      return data.map((h: any) => ({
+        version: h.version,
+        committedAt: h.committed_at,
+        changeStatus: {
+          additions: h.change_status?.additions || 0,
+          deletions: h.change_status?.deletions || 0,
+          total: h.change_status?.total || 0,
+        },
+      }));
+    });
   }
 
   // 获取特定版本的内容
@@ -275,28 +319,31 @@ export class GistRepository implements IGistRepository {
     sha: string,
   ): Promise<Record<string, GistFile>> {
     this.ensureAuth();
-    const { data } = await this.octokit!.rest.gists.getRevision({
-      gist_id: gistId,
-      sha: sha,
-    });
+    return this.requestWithRetry(async () => {
+      const { data, headers } = await this.octokit!.rest.gists.getRevision({
+        gist_id: gistId,
+        sha: sha,
+      });
+      this.updateRateLimit(headers);
 
-    const result: Record<string, GistFile> = {};
+      const result: Record<string, GistFile> = {};
 
-    if (data.files) {
-      for (const [filename, fileObj] of Object.entries(data.files)) {
-        const file = fileObj as GithubGistFile;
-        if (file && !file.truncated) {
-          result[filename] = {
-            id: filename,
-            filename: filename,
-            content: file.content || "",
-            language: file.language || undefined,
-            updated_at: data.updated_at,
-          };
+      if (data.files) {
+        for (const [filename, fileObj] of Object.entries(data.files)) {
+          const file = fileObj as GithubGistFile;
+          if (file && !file.truncated) {
+            result[filename] = {
+              id: filename,
+              filename: filename,
+              content: file.content || "",
+              language: file.language || undefined,
+              updated_at: data.updated_at,
+            };
+          }
         }
       }
-    }
 
-    return result;
+      return result;
+    });
   }
 }

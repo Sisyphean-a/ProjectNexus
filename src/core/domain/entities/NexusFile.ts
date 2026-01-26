@@ -1,4 +1,5 @@
 import { LanguageRegistry } from '../services/LanguageRegistry';
+import { calculateChecksum } from '../shared/Hash';
 
 export class NexusFile {
   constructor(
@@ -8,7 +9,9 @@ export class NexusFile {
     public language: string,
     public tags: string[] = [],
     public updatedAt: string = new Date().toISOString(),
-    public isDirty: boolean = false
+    public isDirty: boolean = false,
+    public checksum: string = '',
+    public lastSyncedAt: string | null = null
   ) {}
 
   /**
@@ -22,9 +25,15 @@ export class NexusFile {
   updateContent(newContent: string): void {
     if (this.content !== newContent) {
       this.content = newContent;
+      this.checksum = calculateChecksum(newContent);
       this.updatedAt = new Date().toISOString();
       this.isDirty = true;
     }
+  }
+
+  markSynced(remoteUpdatedAt: string): void {
+    this.isDirty = false;
+    this.lastSyncedAt = remoteUpdatedAt;
   }
 
   changeLanguage(newLang: string): void {

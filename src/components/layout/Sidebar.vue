@@ -271,6 +271,20 @@ async function handleSync() {
           </template>
         </NButton>
       </div>
+      
+      <!-- API Rate Limit -->
+      <div
+        v-if="nexusStore.apiRateLimit?.limit > 0"
+        class="flex items-center justify-between text-xs pt-1 border-t border-dashed"
+        :class="[
+          themeStore.isDark ? 'text-slate-500 border-slate-700' : 'text-slate-400 border-slate-200',
+          nexusStore.apiRateLimit.remaining < 100 ? 'text-red-500 font-bold' : ''
+        ]"
+        :title="`重置时间: ${new Date(nexusStore.apiRateLimit.resetAt).toLocaleTimeString()}`"
+      >
+        <span>API 配额</span>
+        <span>{{ nexusStore.apiRateLimit.remaining }}/{{ nexusStore.apiRateLimit.limit }}</span>
+      </div>
     </div>
 
     <!-- 右键菜单 -->
