@@ -72,7 +72,7 @@ export const sharedConfig: UserConfig = {
 
     monacoEditorPlugin({
       languageWorkers: ["editorWorkerService", "typescript", "json", "html", "css"],
-      customDistPath: (_root, buildOutDir) => {
+      customDistPath: (_root: string, buildOutDir: string) => {
         return resolve(buildOutDir, "assets");
       },
     }),

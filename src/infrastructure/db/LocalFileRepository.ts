@@ -31,7 +31,9 @@ export class LocalFileRepository implements IFileRepository {
       language: file.language,
       tags: file.tags,
       updated_at: file.updatedAt,
-      is_dirty: file.isDirty
+      is_dirty: file.isDirty,
+      checksum: file.checksum,
+      synced_at: file.lastSyncedAt
     };
   }
 
@@ -43,7 +45,9 @@ export class LocalFileRepository implements IFileRepository {
       record.language,
       record.tags,
       record.updated_at,
-      record.is_dirty
+      record.is_dirty,
+      record.checksum,
+      record.synced_at
     );
   }
 }

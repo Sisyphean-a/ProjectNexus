@@ -7,6 +7,7 @@ import type {
   GistIndexItem,
 } from "../../domain/entities/types";
 import { NexusFile } from "../../domain/entities/NexusFile";
+import { calculateChecksum } from "../../domain/shared/Hash";
 
 export class SyncService {
   constructor(
@@ -68,6 +69,7 @@ export class SyncService {
 
     // 4. Transform & Save Files
     const nexusFiles: NexusFile[] = [];
+    const conflictFiles: NexusFile[] = [];
 
     // 构建映射: Gist Filename -> Index Item Info
     const fileMap = new Map<string, GistIndexItem>();
@@ -82,22 +84,66 @@ export class SyncService {
 
       const itemInfo = fileMap.get(filename);
       if (itemInfo) {
-        const nexusFile = new NexusFile(
-          itemInfo.id,
-          itemInfo.title,
-          gistFile.content,
-          itemInfo.language, // 优先使用索引中的语言定义
-          itemInfo.tags || [],
-          gistFile.updated_at || new Date().toISOString(),
-          false, // clean
-        );
+        // --- 冲突检测开始 ---
+        const localFile = await this.fileRepo.get(itemInfo.id);
+        const remoteContent = gistFile.content;
+        const remoteTime = gistFile.updated_at || new Date().toISOString();
+        const remoteChecksum = calculateChecksum(remoteContent);
+
+        let nexusFile: NexusFile;
+
+        if (localFile && localFile.isDirty && localFile.checksum !== remoteChecksum) {
+          // 发生冲突: 本地已修改且内容与远程不同
+          console.warn(`[SyncService] 发现冲突: ${itemInfo.title} (${filename})`);
+          
+          // 创建冲突副本
+          const conflictId = `${itemInfo.id}_conflict_${Date.now().toString(36)}`;
+          const conflictFile = new NexusFile(
+            conflictId,
+            `${itemInfo.title} (Conflict)`,
+            localFile.content,
+            localFile.language,
+            localFile.tags,
+            localFile.updatedAt,
+            true, // 冲突文件本身也是 dirty 的，需要用户处理
+            localFile.checksum,
+            localFile.lastSyncedAt
+          );
+          conflictFiles.push(conflictFile);
+
+          // 保持 ID 不变，但更新为远程内容
+          nexusFile = new NexusFile(
+            itemInfo.id,
+            itemInfo.title,
+            remoteContent,
+            itemInfo.language,
+            itemInfo.tags || [],
+            remoteTime,
+            false,
+            remoteChecksum,
+            remoteTime
+          );
+        } else {
+          // 无冲突或本地无修改，直接更新/覆盖
+          nexusFile = new NexusFile(
+            itemInfo.id,
+            itemInfo.title,
+            remoteContent,
+            itemInfo.language,
+            itemInfo.tags || [],
+            remoteTime,
+            false,
+            remoteChecksum,
+            remoteTime
+          );
+        }
         nexusFiles.push(nexusFile);
       }
     }
 
     // Bulk Save to DB
     if (nexusFiles.length > 0) {
-      await this.fileRepo.saveBulk(nexusFiles);
+      await this.fileRepo.saveBulk([...nexusFiles, ...conflictFiles]);
     }
 
     // Save Index to Local

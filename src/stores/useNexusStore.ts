@@ -3,7 +3,7 @@ import { ref, computed } from "vue";
 import { localStoreRepository } from "../infrastructure";
 // Ideally read via Service or Repo. fileService doesn't expose getFile.
 // Let's keep nexusDb for now for reading content, or import fileRepository.
-import { fileRepository } from "../infrastructure";
+import { fileRepository, gistRepository } from "../infrastructure";
 import { syncService, fileService } from "../services";
 import type { NexusIndex, NexusConfig } from "../core/domain/entities/types";
 import { useAuthStore } from "./useAuthStore";
@@ -25,6 +25,9 @@ export const useNexusStore = defineStore("nexus", () => {
   // Selection State
   const selectedCategoryId = ref<string | null>(null);
   const selectedFileId = ref<string | null>(null);
+
+  // API 限制信息 (直接从基础设施层响应)
+  const apiRateLimit = computed(() => gistRepository.rateLimit);
 
   const currentCategory = computed(() => {
     if (!index.value || !Array.isArray(index.value.categories) || !selectedCategoryId.value) return null;
@@ -470,6 +473,7 @@ export const useNexusStore = defineStore("nexus", () => {
     currentFileList,
     lastSyncedAt,
     remoteUpdatedAt,
+    apiRateLimit,
     init,
     sync,
     initializeGist,

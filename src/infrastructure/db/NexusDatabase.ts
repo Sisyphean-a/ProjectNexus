@@ -8,8 +8,9 @@ export interface LocalFile {
   language: string;
   tags: string[];
   updated_at: string; // ISO string
-  synced_at?: string; // When it was last synced with Gist
+  synced_at?: string | null; // When it was last synced with Gist
   is_dirty: boolean; // If true, needs to be pushed to Gist
+  checksum: string;
 }
 
 export class NexusDatabase extends Dexie {
@@ -17,7 +18,7 @@ export class NexusDatabase extends Dexie {
 
   constructor() {
     super("NexusDB");
-    this.version(1).stores({
+    this.version(2).stores({
       files: "id, gist_filename, title, *tags, is_dirty", // Primary key and indexes
     });
   }
