@@ -94,6 +94,7 @@ src/
 
 - **GistRepository**: `IGistRepository` 的实现，使用 Octokit。处理 Gist JSON 映射的复杂性。
 - **LocalFileRepository**: `IFileRepository` 的实现，使用 Dexie。将 `NexusFile` 实体映射为简单的数据库记录。
+- **LocalHistoryRepository**: 管理文件历史快照，支持时间轴查询和 Gist 历史导入。
 
 ---
 
@@ -116,6 +117,12 @@ src/
 
 1.  **更新**: 用户添加/重命名文件 -> 内存中的 `NexusIndex` 更新。
 2.  **推送**: 关键的 `nexus_index.json` 更新会立即推送到 Gist 以保持一致性。
+
+### 4. 历史回滚 (History Rollback)
+
+1.  **快照**:每次保存 (`FileService`) 会自动在 `NexusDB.history` 表中创建一份快照。
+2.  **本地优先**: 历史记录默认读取本地。如果本地为空，支持从 Gist 导入变更历史 (Sync)。
+3.  **Diff**: 使用 Monaco Diff Editor 进行全屏对比。
 
 ---
 

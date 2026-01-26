@@ -482,6 +482,9 @@ function handleEditorMount(editor: any) {
     <VersionHistory
       v-model:show="showHistoryPanel"
       :filename="selectedFile?.gist_file || ''"
+      :fileId="selectedFile?.id"
+      :currentContent="code"
+      :language="language"
       @restore="handleRestoreVersion"
     />
   </div>

@@ -13,17 +13,34 @@ export interface LocalFile {
   checksum: string;
 }
 
+export interface HistoryEntry {
+  id?: number; // Auto-increment
+  fileId: string;
+  content: string;
+  timestamp: string; // ISO string
+  type: "manual" | "auto" | "sync" | "restore";
+  note?: string;
+}
+
 export class NexusDatabase extends Dexie {
   files!: Table<LocalFile>;
+  history!: Table<HistoryEntry>;
 
   constructor() {
     super("NexusDB");
+    
+    // Version 2: Initial Schema
     this.version(2).stores({
-      files: "id, gist_filename, title, *tags, is_dirty", // Primary key and indexes
+      files: "id, gist_filename, title, *tags, is_dirty",
+    });
+
+    // Version 3: Add History
+    this.version(3).stores({
+      files: "id, gist_filename, title, *tags, is_dirty",
+      history: "++id, fileId, timestamp, type",
     });
   }
 }
 
-export const db = new Dexie("NexusDB") as NexusDatabase; // Re-declare for better typing if needed, or just new NexusDatabase()
-// Actually, standard Dexie pattern:
 export const nexusDb = new NexusDatabase();
+

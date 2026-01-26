@@ -3,7 +3,7 @@ import { ref, computed } from "vue";
 import { localStoreRepository } from "../infrastructure";
 // Ideally read via Service or Repo. fileService doesn't expose getFile.
 // Let's keep nexusDb for now for reading content, or import fileRepository.
-import { fileRepository, gistRepository } from "../infrastructure";
+import { fileRepository, gistRepository, localHistoryRepository } from "../infrastructure";
 import { syncService, fileService } from "../services";
 import type { NexusIndex, NexusConfig } from "../core/domain/entities/types";
 import { useAuthStore } from "./useAuthStore";
@@ -141,6 +141,88 @@ export const useNexusStore = defineStore("nexus", () => {
       remoteUpdatedAt.value = newRemoteTime;
       lastSyncedAt.value = new Date().toISOString();
     }
+
+    // Capture history snapshot
+    try {
+      await localHistoryRepository.addSnapshot(fileId, content, "manual");
+      await localHistoryRepository.pruneHistory(fileId);
+    } catch (e) {
+      console.warn("[Nexus History] Failed to save snapshot", e);
+    }
+  }
+
+  async function restoreFileContent(fileId: string, content: string) {
+     if (!index.value || !config.value) return;
+     
+     // 恢复等同于一次保存，但我们可以标记为 'restore' 类型
+     // 这里直接利用 saveFileContent 逻辑，但也许我们想明确历史记录类型？
+     // 还是直接复用？
+     // 调用 fileService 更新内容
+     const ctx = {
+      index: index.value,
+      config: config.value,
+      lastRemoteUpdatedAt: remoteUpdatedAt.value,
+    };
+
+    const { newRemoteTime } = await fileService.updateContent(
+      ctx,
+      fileId,
+      content,
+    );
+
+    if (newRemoteTime) {
+      remoteUpdatedAt.value = newRemoteTime;
+      lastSyncedAt.value = new Date().toISOString();
+    }
+
+    // 记录恢复操作的历史
+    try {
+      await localHistoryRepository.addSnapshot(fileId, content, "restore", "Restored from history");
+    } catch (e) {
+      console.warn("[Nexus History] Failed to save restore snapshot", e);
+    }
+  }
+
+  // 导入远程历史到本地
+  async function importRemoteHistory(fileId: string, filename: string) {
+    if (!currentGistId.value) return;
+    
+    // 1. 获取远程 Commit 列表
+    const history = await gistRepository.getGistHistory(currentGistId.value);
+    
+    // 2. 遍历并导入 (倒序遍历，虽然 addSnapshot 并不严格依赖顺序，但便于逻辑理解)
+    // 注意：Gist API 只有 listCommits，需要逐个获取详情才能拿到文件内容
+    // 为了性能，我们限制只获取最近 10 个版本
+    const recentHistory = history.slice(0, 10);
+    
+    let importedCount = 0;
+    
+    for (const entry of recentHistory) {
+         try {
+             // 检查本地是否已存在该时间点的记录（简单通过 timestamp 检查不太准，这里依靠 addSnapshot 的内容去重）
+             // 更理想的是：LocalHistoryRepository 支持按 timestamp 查询
+             // 但这里直接由 addSnapshot 处理
+             
+             // 获取该版本的文件内容
+             const files = await gistRepository.getGistVersion(currentGistId.value, entry.version);
+             const targetFile = files[filename];
+             
+             if (targetFile) {
+                 await localHistoryRepository.addSnapshot(
+                     fileId, 
+                     targetFile.content, 
+                     "sync", 
+                     `Imported from Gist (${entry.version.substring(0, 7)})`,
+                     entry.committedAt // 使用 commits 中的提交时间
+                 );
+                 importedCount++;
+             }
+         } catch (e) {
+             console.warn(`[History Import] Failed to import version ${entry.version}`, e);
+         }
+    }
+    
+    return importedCount;
   }
 
   async function initializeGist() {
@@ -489,5 +571,9 @@ export const useNexusStore = defineStore("nexus", () => {
     saveFileContent,
     changeFileLanguage,
     getFileLanguage,
+    // History
+    getFileHistory: async (fileId: string) => localHistoryRepository.getHistory(fileId),
+    restoreFileContent,
+    importRemoteHistory,
   };
 });
