@@ -186,8 +186,10 @@ async function handleSave() {
 }
 
 // 切换安全状态
-async function handleToggleSecure() {
-  if (!nexusStore.selectedFileId || !selectedFile.value) return;
+  const isTogglingSecure = ref(false); // Add ref outside
+
+  async function handleToggleSecure() {
+  if (!nexusStore.selectedFileId || !selectedFile.value || isTogglingSecure.value) return;
   
   const isCurrentlySecure = !!selectedFile.value.isSecure;
   
@@ -208,6 +210,7 @@ async function handleToggleSecure() {
       return;
   }
 
+  isTogglingSecure.value = true;
   const action = isCurrentlySecure ? "解密" : "加密";
   const loadingMsg = message.loading(`${action}中...`, { duration: 0 });
 
@@ -215,10 +218,14 @@ async function handleToggleSecure() {
     await nexusStore.updateFileSecureStatus(nexusStore.selectedFileId, !isCurrentlySecure);
     loadingMsg.destroy();
     message.success(`文件已${action}`);
-  } catch (e) {
+  } catch (e: any) {
     loadingMsg.destroy();
     console.error(e);
-    message.error(`${action}失败`);
+    // 展示具体错误信息
+    const errText = e.message || "未知错误";
+    message.error(`${action}失败: ${errText}`);
+  } finally {
+    isTogglingSecure.value = false;
   }
 }
 
@@ -414,6 +421,8 @@ function handleEditorMount(editor: any) {
               <NButton
                 :quaternary="themeStore.isDark"
                 :tertiary="!themeStore.isDark"
+                :disabled="isTogglingSecure"
+                :loading="isTogglingSecure"
                 @click="handleToggleSecure"
                 :type="selectedFile.isSecure ? 'success' : 'default'"
               >

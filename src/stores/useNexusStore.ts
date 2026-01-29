@@ -605,7 +605,48 @@ export const useNexusStore = defineStore("nexus", () => {
 
       // 3. Save Index (Metadata)
       // This pushes the updated index with isSecure flag
-      await saveIndex();
+      try {
+        await saveIndex();
+      } catch (e: any) {
+         // Auto-fixing conflict
+         if (e.message && e.message.includes("同步冲突")) {
+            console.warn("[Nexus] Caught sync conflict during secure toggle, attempting auto-sync and retry...");
+            
+            // 1. Pull latest
+            await sync(); 
+            
+            // 2. Re-check item existence (it might have been deleted remotely)
+            // Need to fetch fresh index value
+             if (!index.value) throw new Error("同步后索引丢失");
+             
+             let reCheckItem = null;
+             for (const cat of index.value.categories) {
+                const found = cat.items.find((i) => i.id === fileId);
+                if (found) {
+                  reCheckItem = found;
+                  break;
+                }
+             }
+
+             if (!reCheckItem) {
+               throw new Error("文件在远程已被删除，无法继续操作");
+             }
+
+             // 3. Re-apply status
+             reCheckItem.isSecure = isSecure;
+             
+             const reFetchedFile = await fileRepository.get(fileId);
+             if (reFetchedFile) {
+               reFetchedFile.isSecure = isSecure;
+               await fileRepository.save(reFetchedFile);
+             }
+
+             // 4. Retry Save Index
+             await saveIndex(); 
+         } else {
+           throw e;
+         }
+      }
 
       // 4. Trigger Push for File (Content)
       // We reuse saveFileContent which calls fileService.updateContent -> pushFile
