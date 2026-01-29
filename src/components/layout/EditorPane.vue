@@ -16,6 +16,7 @@ import {
 import { VueMonacoEditor } from "@guolao/vue-monaco-editor";
 import VersionHistory from "./VersionHistory.vue";
 import { cryptoProvider } from "../../services";
+import { DECRYPTION_PENDING_PREFIX } from "../../core/application/services/SyncService";
 
 const emit = defineEmits<{
   "open-search": [];
@@ -79,6 +80,11 @@ const selectedFile = computed(() => {
   );
 });
 
+// 检测文件是否处于待解密状态
+const isDecryptionPending = computed(() => {
+  return code.value.startsWith(DECRYPTION_PENDING_PREFIX);
+});
+
 // 监听选择变化并加载内容
 watch(
   () => nexusStore.selectedFileId,
@@ -97,7 +103,12 @@ watch(
   () => nexusStore.lastSyncedAt,
   async (newTime, oldTime) => {
     // 只在同步时间变化且有选中文件时刷新
-    if (newTime && newTime !== oldTime && nexusStore.selectedFileId && nexusStore.currentGistId) {
+    if (
+      newTime &&
+      newTime !== oldTime &&
+      nexusStore.selectedFileId &&
+      nexusStore.currentGistId
+    ) {
       await loadFileContent();
     }
   },
@@ -110,20 +121,22 @@ const isProgrammaticUpdate = ref(false);
 // 加载文件内容
 async function loadFileContent() {
   if (!nexusStore.selectedFileId) return;
-  
+
   isLoadingContent.value = true;
   try {
     const content = await nexusStore.getFileContent(nexusStore.selectedFileId);
     code.value = content;
-    
+
     // 从数据库读取语言
-    const savedLanguage = await nexusStore.getFileLanguage(nexusStore.selectedFileId);
-    
+    const savedLanguage = await nexusStore.getFileLanguage(
+      nexusStore.selectedFileId,
+    );
+
     // 标记为程序化更新，防止触发 watcher
     isProgrammaticUpdate.value = true;
     language.value = savedLanguage;
     // 等待 watcher 处理完成（如果有）
-    await nextTick(); 
+    await nextTick();
     isProgrammaticUpdate.value = false;
 
     isDirty.value = false;
@@ -137,21 +150,30 @@ async function loadFileContent() {
 
 // 监听语言变化，同步更改云端文件扩展名
 watch(language, async (newLang, oldLang) => {
-  if (!nexusStore.selectedFileId || isLoadingContent.value || isChangingLanguage.value || isProgrammaticUpdate.value) return;
+  if (
+    !nexusStore.selectedFileId ||
+    isLoadingContent.value ||
+    isChangingLanguage.value ||
+    isProgrammaticUpdate.value
+  )
+    return;
   if (newLang === oldLang) return;
 
   isChangingLanguage.value = true;
   const changingMessage = message.loading("更改语言中...", { duration: 0 });
-  
+
   try {
-    const success = await nexusStore.changeFileLanguage(nexusStore.selectedFileId, newLang);
+    const success = await nexusStore.changeFileLanguage(
+      nexusStore.selectedFileId,
+      newLang,
+    );
     changingMessage.destroy();
     if (success) {
       message.success("语言已更改");
     } else {
       message.error("更改失败");
       isProgrammaticUpdate.value = true;
-      language.value = oldLang;  // 回滚
+      language.value = oldLang; // 回滚
       await nextTick();
       isProgrammaticUpdate.value = false;
     }
@@ -159,7 +181,7 @@ watch(language, async (newLang, oldLang) => {
     changingMessage.destroy();
     message.error("更改语言失败");
     isProgrammaticUpdate.value = true;
-    language.value = oldLang;  // 回滚
+    language.value = oldLang; // 回滚
     await nextTick();
     isProgrammaticUpdate.value = false;
     console.error(e);
@@ -186,13 +208,18 @@ async function handleSave() {
 }
 
 // 切换安全状态
-  const isTogglingSecure = ref(false); // Add ref outside
+const isTogglingSecure = ref(false); // Add ref outside
 
-  async function handleToggleSecure() {
-  if (!nexusStore.selectedFileId || !selectedFile.value || isTogglingSecure.value) return;
-  
+async function handleToggleSecure() {
+  if (
+    !nexusStore.selectedFileId ||
+    !selectedFile.value ||
+    isTogglingSecure.value
+  )
+    return;
+
   const isCurrentlySecure = !!selectedFile.value.isSecure;
-  
+
   // 如果要开启加密，必须先有密码
   if (!isCurrentlySecure && !cryptoProvider.hasPassword()) {
     dialog.warning({
@@ -202,12 +229,12 @@ async function handleSave() {
     });
     return;
   }
-  
+
   // 如果要关闭加密 (解密)，也需要密码确认 (实际 logic 中只要有密码即可，或验证一次)
   if (isCurrentlySecure && !cryptoProvider.hasPassword()) {
-      // Should not happen if we persisted password, but safe check
-      message.error("请先设置保险库密码以解密");
-      return;
+    // Should not happen if we persisted password, but safe check
+    message.error("请先设置保险库密码以解密");
+    return;
   }
 
   isTogglingSecure.value = true;
@@ -215,7 +242,10 @@ async function handleSave() {
   const loadingMsg = message.loading(`${action}中...`, { duration: 0 });
 
   try {
-    await nexusStore.updateFileSecureStatus(nexusStore.selectedFileId, !isCurrentlySecure);
+    await nexusStore.updateFileSecureStatus(
+      nexusStore.selectedFileId,
+      !isCurrentlySecure,
+    );
     loadingMsg.destroy();
     message.success(`文件已${action}`);
   } catch (e: any) {
@@ -415,7 +445,7 @@ function handleEditorMount(editor: any) {
           :class="themeStore.isDark ? 'bg-slate-600' : 'bg-slate-300'"
         ></div>
 
-         <NButtonGroup v-if="selectedFile" size="small">
+        <NButtonGroup v-if="selectedFile" size="small">
           <NTooltip trigger="hover">
             <template #trigger>
               <NButton
@@ -427,16 +457,22 @@ function handleEditorMount(editor: any) {
                 :type="selectedFile.isSecure ? 'success' : 'default'"
               >
                 <template #icon>
-                  <div :class="[
-                      selectedFile.isSecure ? 'i-heroicons-lock-closed' : 'i-heroicons-lock-open',
-                      'w-4 h-4'
-                    ]"></div>
+                  <div
+                    :class="[
+                      selectedFile.isSecure
+                        ? 'i-heroicons-lock-closed'
+                        : 'i-heroicons-lock-open',
+                      'w-4 h-4',
+                    ]"
+                  ></div>
                 </template>
               </NButton>
             </template>
-            {{ selectedFile.isSecure ? "已加密 (点击解密)" : "未加密 (点击加密)" }}
+            {{
+              selectedFile.isSecure ? "已加密 (点击解密)" : "未加密 (点击加密)"
+            }}
           </NTooltip>
-         </NButtonGroup>
+        </NButtonGroup>
 
         <!-- 分隔符 -->
         <div
@@ -504,7 +540,7 @@ function handleEditorMount(editor: any) {
       </div>
 
       <VueMonacoEditor
-        v-else
+        v-else-if="!isDecryptionPending"
         v-model:value="code"
         :language="language"
         :theme="themeStore.isDark ? 'vs-dark' : 'vs'"
@@ -526,6 +562,36 @@ function handleEditorMount(editor: any) {
         @mount="handleEditorMount"
         class="h-full w-full"
       />
+
+      <!-- 待解密状态提示 -->
+      <div
+        v-else-if="isDecryptionPending"
+        class="absolute inset-0 flex items-center justify-center"
+        :class="themeStore.isDark ? 'text-slate-400' : 'text-slate-500'"
+      >
+        <div class="text-center max-w-md p-6">
+          <div
+            class="i-heroicons-lock-closed w-16 h-16 mx-auto mb-4 text-amber-500 opacity-80"
+          ></div>
+          <p class="text-lg font-medium mb-2">此文件已加密</p>
+          <p
+            class="text-sm mb-4"
+            :class="themeStore.isDark ? 'text-slate-500' : 'text-slate-400'"
+          >
+            请在侧边栏设置保险库密码后，点击同步按钮以解密内容
+          </p>
+          <div
+            class="text-xs px-3 py-2 rounded-lg"
+            :class="
+              themeStore.isDark
+                ? 'bg-slate-800 text-slate-400'
+                : 'bg-slate-100 text-slate-500'
+            "
+          >
+            提示：设置密码后系统将自动重新同步
+          </div>
+        </div>
+      </div>
 
       <!-- 加载遮罩 -->
       <div

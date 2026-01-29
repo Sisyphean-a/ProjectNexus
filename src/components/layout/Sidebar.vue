@@ -100,7 +100,7 @@ async function handleAddCategory() {
     await nexusStore.addCategory(
       newCategoryName.value.trim(),
       "folder",
-      newCategoryDefaultLanguage.value
+      newCategoryDefaultLanguage.value,
     );
     message.success("分类创建成功");
     newCategoryName.value = "";
@@ -188,6 +188,21 @@ async function handleSaveSecurity() {
   message.success("保险库密码已设置 (本设备)");
   showSecurityModal.value = false;
   vaultPasswordInput.value = "";
+
+  // 自动重新同步以解密待解密的文件
+  if (nexusStore.index) {
+    try {
+      // 1. 清理本地加密缓存 (删除未修改的明文副本)
+      await nexusStore.resetSecureCache();
+
+      // 2. 强制同步 (忽略时间戳，重新拉取并尝试解密)
+      await nexusStore.sync(true);
+
+      message.success("缓存已刷新，文件已重新验证");
+    } catch (e) {
+      console.error("Auto sync after password set failed", e);
+    }
+  }
 }
 
 // 同步
@@ -276,7 +291,7 @@ async function handleSync() {
       </NButton>
 
       <div class="flex gap-2">
-         <NButton
+        <NButton
           block
           size="small"
           :quaternary="themeStore.isDark"
@@ -303,19 +318,27 @@ async function handleSync() {
           </template>
         </NButton>
       </div>
-      
+
       <!-- API Rate Limit -->
       <div
         v-if="nexusStore.apiRateLimit?.limit > 0"
         class="flex items-center justify-between text-xs pt-1 border-t border-dashed"
         :class="[
-          themeStore.isDark ? 'text-slate-500 border-slate-700' : 'text-slate-400 border-slate-200',
-          nexusStore.apiRateLimit.remaining < 100 ? 'text-red-500 font-bold' : ''
+          themeStore.isDark
+            ? 'text-slate-500 border-slate-700'
+            : 'text-slate-400 border-slate-200',
+          nexusStore.apiRateLimit.remaining < 100
+            ? 'text-red-500 font-bold'
+            : '',
         ]"
         :title="`重置时间: ${new Date(nexusStore.apiRateLimit.resetAt).toLocaleTimeString()}`"
       >
         <span>API 配额</span>
-        <span>{{ nexusStore.apiRateLimit.remaining }}/{{ nexusStore.apiRateLimit.limit }}</span>
+        <span
+          >{{ nexusStore.apiRateLimit.remaining }}/{{
+            nexusStore.apiRateLimit.limit
+          }}</span
+        >
       </div>
     </div>
 
@@ -378,10 +401,15 @@ async function handleSync() {
     </NModal>
 
     <!-- 安全设置模态框 -->
-    <NModal v-model:show="showSecurityModal" preset="dialog" title="设置保险库密码">
+    <NModal
+      v-model:show="showSecurityModal"
+      preset="dialog"
+      title="设置保险库密码"
+    >
       <div class="space-y-4">
         <p class="text-xs text-gray-500">
-          此密码用于加密/解密标记为“安全”的文件。密码仅存储在本地 (LocalStorage)。
+          此密码用于加密/解密标记为“安全”的文件。密码仅存储在本地
+          (LocalStorage)。
         </p>
         <NInput
           v-model:value="vaultPasswordInput"

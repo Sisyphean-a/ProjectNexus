@@ -3,7 +3,11 @@ import { ref, computed } from "vue";
 import { localStoreRepository } from "../infrastructure";
 // Ideally read via Service or Repo. fileService doesn't expose getFile.
 // Let's keep nexusDb for now for reading content, or import fileRepository.
-import { fileRepository, gistRepository, localHistoryRepository } from "../infrastructure";
+import {
+  fileRepository,
+  gistRepository,
+  localHistoryRepository,
+} from "../infrastructure";
 import { syncService, fileService } from "../services";
 import type { NexusIndex, NexusConfig } from "../core/domain/entities/types";
 import { useAuthStore } from "./useAuthStore";
@@ -30,7 +34,12 @@ export const useNexusStore = defineStore("nexus", () => {
   const apiRateLimit = computed(() => gistRepository.rateLimit);
 
   const currentCategory = computed(() => {
-    if (!index.value || !Array.isArray(index.value.categories) || !selectedCategoryId.value) return null;
+    if (
+      !index.value ||
+      !Array.isArray(index.value.categories) ||
+      !selectedCategoryId.value
+    )
+      return null;
     return (
       index.value.categories.find((c) => c.id === selectedCategoryId.value) ||
       null
@@ -60,7 +69,7 @@ export const useNexusStore = defineStore("nexus", () => {
     }
   }
 
-  async function sync() {
+  async function sync(force = false) {
     if (!authStore.isAuthenticated) {
       throw new Error("未认证");
     }
@@ -71,9 +80,10 @@ export const useNexusStore = defineStore("nexus", () => {
         config.value = await localStoreRepository.getConfig();
       }
 
+      // 如果强制同步，传入 null 作为上次更新时间以忽略增量检查
       const result = await syncService.syncDown(
         config.value!,
-        remoteUpdatedAt.value,
+        force ? null : remoteUpdatedAt.value,
       );
 
       if (result.synced) {
@@ -152,13 +162,13 @@ export const useNexusStore = defineStore("nexus", () => {
   }
 
   async function restoreFileContent(fileId: string, content: string) {
-     if (!index.value || !config.value) return;
-     
-     // 恢复等同于一次保存，但我们可以标记为 'restore' 类型
-     // 这里直接利用 saveFileContent 逻辑，但也许我们想明确历史记录类型？
-     // 还是直接复用？
-     // 调用 fileService 更新内容
-     const ctx = {
+    if (!index.value || !config.value) return;
+
+    // 恢复等同于一次保存，但我们可以标记为 'restore' 类型
+    // 这里直接利用 saveFileContent 逻辑，但也许我们想明确历史记录类型？
+    // 还是直接复用？
+    // 调用 fileService 更新内容
+    const ctx = {
       index: index.value,
       config: config.value,
       lastRemoteUpdatedAt: remoteUpdatedAt.value,
@@ -177,7 +187,12 @@ export const useNexusStore = defineStore("nexus", () => {
 
     // 记录恢复操作的历史
     try {
-      await localHistoryRepository.addSnapshot(fileId, content, "restore", "Restored from history");
+      await localHistoryRepository.addSnapshot(
+        fileId,
+        content,
+        "restore",
+        "Restored from history",
+      );
     } catch (e) {
       console.warn("[Nexus History] Failed to save restore snapshot", e);
     }
@@ -186,42 +201,48 @@ export const useNexusStore = defineStore("nexus", () => {
   // 导入远程历史到本地
   async function importRemoteHistory(fileId: string, filename: string) {
     if (!currentGistId.value) return;
-    
+
     // 1. 获取远程 Commit 列表
     const history = await gistRepository.getGistHistory(currentGistId.value);
-    
+
     // 2. 遍历并导入 (倒序遍历，虽然 addSnapshot 并不严格依赖顺序，但便于逻辑理解)
     // 注意：Gist API 只有 listCommits，需要逐个获取详情才能拿到文件内容
     // 为了性能，我们限制只获取最近 10 个版本
     const recentHistory = history.slice(0, 10);
-    
+
     let importedCount = 0;
-    
+
     for (const entry of recentHistory) {
-         try {
-             // 检查本地是否已存在该时间点的记录（简单通过 timestamp 检查不太准，这里依靠 addSnapshot 的内容去重）
-             // 更理想的是：LocalHistoryRepository 支持按 timestamp 查询
-             // 但这里直接由 addSnapshot 处理
-             
-             // 获取该版本的文件内容
-             const files = await gistRepository.getGistVersion(currentGistId.value, entry.version);
-             const targetFile = files[filename];
-             
-             if (targetFile) {
-                 await localHistoryRepository.addSnapshot(
-                     fileId, 
-                     targetFile.content, 
-                     "sync", 
-                     `Imported from Gist (${entry.version.substring(0, 7)})`,
-                     entry.committedAt // 使用 commits 中的提交时间
-                 );
-                 importedCount++;
-             }
-         } catch (e) {
-             console.warn(`[History Import] Failed to import version ${entry.version}`, e);
-         }
+      try {
+        // 检查本地是否已存在该时间点的记录（简单通过 timestamp 检查不太准，这里依靠 addSnapshot 的内容去重）
+        // 更理想的是：LocalHistoryRepository 支持按 timestamp 查询
+        // 但这里直接由 addSnapshot 处理
+
+        // 获取该版本的文件内容
+        const files = await gistRepository.getGistVersion(
+          currentGistId.value,
+          entry.version,
+        );
+        const targetFile = files[filename];
+
+        if (targetFile) {
+          await localHistoryRepository.addSnapshot(
+            fileId,
+            targetFile.content,
+            "sync",
+            `Imported from Gist (${entry.version.substring(0, 7)})`,
+            entry.committedAt, // 使用 commits 中的提交时间
+          );
+          importedCount++;
+        }
+      } catch (e) {
+        console.warn(
+          `[History Import] Failed to import version ${entry.version}`,
+          e,
+        );
+      }
     }
-    
+
     return importedCount;
   }
 
@@ -257,6 +278,41 @@ export const useNexusStore = defineStore("nexus", () => {
     } finally {
       isLoading.value = false;
     }
+  }
+
+  // 清理本地未修改的加密文件缓存 (用于密码变更时重置状态)
+  async function resetSecureCache() {
+    if (!index.value) return;
+
+    const secureFilesToDelete: string[] = [];
+
+    // 1. 收集所有 isSecure 的文件 ID
+    for (const cat of index.value.categories) {
+      for (const item of cat.items) {
+        if (item.isSecure) {
+          secureFilesToDelete.push(item.id);
+        }
+      }
+    }
+
+    // 2. 检查 dirty 状态并删除
+    // 我们必须逐个检查，因为不能删除 dirty 的文件（防止数据丢失）
+    await Promise.all(
+      secureFilesToDelete.map(async (id) => {
+        try {
+          const file = await fileRepository.get(id);
+          if (file && !file.isDirty) {
+            await fileRepository.delete(id);
+          }
+        } catch (e) {
+          console.warn(`[Nexus] Failed to clear secure cache for ${id}`, e);
+        }
+      }),
+    );
+
+    console.log(
+      `[Nexus] Secure cache reset. Cleared ${secureFilesToDelete.length} potential targets.`,
+    );
   }
 
   async function updateConfig(updates: Partial<NexusConfig>) {
@@ -304,7 +360,11 @@ export const useNexusStore = defineStore("nexus", () => {
 
   // ========== 分类 CRUD ==========
 
-  async function addCategory(name: string, icon = "folder", defaultLanguage = "yaml") {
+  async function addCategory(
+    name: string,
+    icon = "folder",
+    defaultLanguage = "yaml",
+  ) {
     console.log("[addCategory] 开始创建分类:", name);
 
     if (!index.value) {
@@ -375,7 +435,8 @@ export const useNexusStore = defineStore("nexus", () => {
     if (cat) {
       if (updates.name) cat.name = updates.name;
       if (updates.icon) cat.icon = updates.icon;
-      if (updates.defaultLanguage !== undefined) cat.defaultLanguage = updates.defaultLanguage;
+      if (updates.defaultLanguage !== undefined)
+        cat.defaultLanguage = updates.defaultLanguage;
       await saveIndex();
     }
   }
@@ -431,7 +492,7 @@ export const useNexusStore = defineStore("nexus", () => {
     if (!index.value || !currentGistId.value || !config.value) return null;
 
     // 获取分类默认语言
-    const category = index.value.categories.find(c => c.id === categoryId);
+    const category = index.value.categories.find((c) => c.id === categoryId);
     const finalLanguage = language || category?.defaultLanguage || "yaml";
 
     const ctx = {
@@ -572,9 +633,11 @@ export const useNexusStore = defineStore("nexus", () => {
     changeFileLanguage,
     getFileLanguage,
     // History
-    getFileHistory: async (fileId: string) => localHistoryRepository.getHistory(fileId),
+    getFileHistory: async (fileId: string) =>
+      localHistoryRepository.getHistory(fileId),
     restoreFileContent,
     importRemoteHistory,
+    resetSecureCache,
     updateFileSecureStatus: async (fileId: string, isSecure: boolean) => {
       if (!index.value || !config.value) return;
 
@@ -595,8 +658,8 @@ export const useNexusStore = defineStore("nexus", () => {
       if (file) {
         file.isSecure = isSecure;
         // Ensure we mark it as dirty if we want to force push?
-        // Actually saveFileContent treats content update. 
-        // SyncService.pushFile encrypts based on isSecure. 
+        // Actually saveFileContent treats content update.
+        // SyncService.pushFile encrypts based on isSecure.
         // We just need to trigger a push.
         await fileRepository.save(file);
       } else {
@@ -608,44 +671,46 @@ export const useNexusStore = defineStore("nexus", () => {
       try {
         await saveIndex();
       } catch (e: any) {
-         // Auto-fixing conflict
-         if (e.message && e.message.includes("同步冲突")) {
-            console.warn("[Nexus] Caught sync conflict during secure toggle, attempting auto-sync and retry...");
-            
-            // 1. Pull latest
-            await sync(); 
-            
-            // 2. Re-check item existence (it might have been deleted remotely)
-            // Need to fetch fresh index value
-             if (!index.value) throw new Error("同步后索引丢失");
-             
-             let reCheckItem = null;
-             for (const cat of index.value.categories) {
-                const found = cat.items.find((i) => i.id === fileId);
-                if (found) {
-                  reCheckItem = found;
-                  break;
-                }
-             }
+        // Auto-fixing conflict
+        if (e.message && e.message.includes("同步冲突")) {
+          console.warn(
+            "[Nexus] Caught sync conflict during secure toggle, attempting auto-sync and retry...",
+          );
 
-             if (!reCheckItem) {
-               throw new Error("文件在远程已被删除，无法继续操作");
-             }
+          // 1. Pull latest
+          await sync();
 
-             // 3. Re-apply status
-             reCheckItem.isSecure = isSecure;
-             
-             const reFetchedFile = await fileRepository.get(fileId);
-             if (reFetchedFile) {
-               reFetchedFile.isSecure = isSecure;
-               await fileRepository.save(reFetchedFile);
-             }
+          // 2. Re-check item existence (it might have been deleted remotely)
+          // Need to fetch fresh index value
+          if (!index.value) throw new Error("同步后索引丢失");
 
-             // 4. Retry Save Index
-             await saveIndex(); 
-         } else {
-           throw e;
-         }
+          let reCheckItem = null;
+          for (const cat of index.value.categories) {
+            const found = cat.items.find((i) => i.id === fileId);
+            if (found) {
+              reCheckItem = found;
+              break;
+            }
+          }
+
+          if (!reCheckItem) {
+            throw new Error("文件在远程已被删除，无法继续操作");
+          }
+
+          // 3. Re-apply status
+          reCheckItem.isSecure = isSecure;
+
+          const reFetchedFile = await fileRepository.get(fileId);
+          if (reFetchedFile) {
+            reFetchedFile.isSecure = isSecure;
+            await fileRepository.save(reFetchedFile);
+          }
+
+          // 4. Retry Save Index
+          await saveIndex();
+        } else {
+          throw e;
+        }
       }
 
       // 4. Trigger Push for File (Content)
