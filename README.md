@@ -136,6 +136,36 @@ src/
 
 ---
 
+## 🔐 隐私与安全 (Privacy & Security)
+
+为了保护敏感配置（如 API Keys、Secrets），系统引入了 **端到端加密 (E2EE)** 机制。
+
+### 核心机制
+
+- **加密标准**: AES-GCM (Advanced Encryption Standard with Galois/Counter Mode)。
+- **密钥管理**: 
+  - 通过用户设置的“保险库密码 (Vault Password)”与盐值 (Salt) 派生加密密钥。
+  - 密码通过 PBKDF2 算法生成 Key，且仅在 Session 或 LocalStorage 中暂存，**绝不上传**。
+- **存储形态**:
+  - Gist (云端): 存储 Base64 编码的密文。
+  - Local DB (本地): 按需解密展示。
+- **粒度**: 文件级加密。用户可对特定文件开启 "Secure Mode"。
+
+### 工作流程
+
+1.  **设置密码**: 用户在侧边栏设置保险库密码。
+2.  **加密**: 
+    - 用户点击编辑器工具栏的“锁”图标 (Toggle Secure)。
+    - 系统使用 `CryptoProvider` 加密内容。
+    - 保存到本地 DB (标记为 `is_secure_local`)。
+    - 推送密文到 GitHub Gist。
+3.  **解密**:
+    - 系统从 Gist 拉取文件。
+    - 检测到 `is_secure` 标记。
+    - 使用本地缓存的密码自动解密内容。
+
+---
+
 ## 🔧 脚本
 
 ### 手动验证

@@ -33,7 +33,8 @@ export class LocalFileRepository implements IFileRepository {
       updated_at: file.updatedAt,
       is_dirty: file.isDirty,
       checksum: file.checksum,
-      synced_at: file.lastSyncedAt
+      synced_at: file.lastSyncedAt,
+      is_secure: file.isSecure ? 1 : 0
     };
   }
 
@@ -47,7 +48,8 @@ export class LocalFileRepository implements IFileRepository {
       record.updated_at,
       record.is_dirty,
       record.checksum,
-      record.synced_at
+      record.synced_at,
+      !!record.is_secure
     );
   }
 }

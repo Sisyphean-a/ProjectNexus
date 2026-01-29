@@ -11,6 +11,9 @@ export interface LocalFile {
   synced_at?: string | null; // When it was last synced with Gist
   is_dirty: boolean; // If true, needs to be pushed to Gist
   checksum: string;
+  is_secure?: number; // 0 or 1 (boolean) - Dexie indexes boolean easier as number sometimes or just use boolean but store allows indexing.
+  // Actually Dexie supports boolean. Let's use boolean? Or number for safer indexing?
+  // Let's use boolean in interface but stored as is.
 }
 
 export interface HistoryEntry {
@@ -38,6 +41,15 @@ export class NexusDatabase extends Dexie {
     this.version(3).stores({
       files: "id, gist_filename, title, *tags, is_dirty",
       history: "++id, fileId, timestamp, type",
+    });
+
+    // Version 4: Add is_secure
+    this.version(4).stores({
+      files: "id, gist_filename, title, *tags, is_dirty, is_secure",
+    }).upgrade(tx => {
+       // Upgrade script if needed, e.g. set default to false (0 or false)
+       return tx.table("files").toCollection().modify({ is_secure: 0 }); // Use 0 for false if we stick to number, or false.
+       // Let's stick to boolean in TS, Dexie handles it. But for upgrade modify, false is fine.
     });
   }
 }

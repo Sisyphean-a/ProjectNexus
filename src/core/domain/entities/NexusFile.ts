@@ -11,7 +11,8 @@ export class NexusFile {
     public updatedAt: string = new Date().toISOString(),
     public isDirty: boolean = false,
     public checksum: string = '',
-    public lastSyncedAt: string | null = null
+    public lastSyncedAt: string | null = null,
+    public isSecure: boolean = false
   ) {}
 
   /**

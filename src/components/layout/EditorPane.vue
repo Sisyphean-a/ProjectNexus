@@ -11,9 +11,11 @@ import {
   NSlider,
   NPopover,
   useMessage,
+  useDialog,
 } from "naive-ui";
 import { VueMonacoEditor } from "@guolao/vue-monaco-editor";
 import VersionHistory from "./VersionHistory.vue";
+import { cryptoProvider } from "../../services";
 
 const emit = defineEmits<{
   "open-search": [];
@@ -21,7 +23,9 @@ const emit = defineEmits<{
 
 const nexusStore = useNexusStore();
 const themeStore = useThemeStore();
+
 const message = useMessage();
+const dialog = useDialog();
 
 // 主题图标
 function getThemeIcon() {
@@ -178,6 +182,43 @@ async function handleSave() {
     savingMessage.destroy();
     message.error("保存失败");
     console.error(e);
+  }
+}
+
+// 切换安全状态
+async function handleToggleSecure() {
+  if (!nexusStore.selectedFileId || !selectedFile.value) return;
+  
+  const isCurrentlySecure = !!selectedFile.value.isSecure;
+  
+  // 如果要开启加密，必须先有密码
+  if (!isCurrentlySecure && !cryptoProvider.hasPassword()) {
+    dialog.warning({
+      title: "需设置保险库密码",
+      content: "启用加密前，请先在侧边栏设置保险库密码。",
+      positiveText: "知道了",
+    });
+    return;
+  }
+  
+  // 如果要关闭加密 (解密)，也需要密码确认 (实际 logic 中只要有密码即可，或验证一次)
+  if (isCurrentlySecure && !cryptoProvider.hasPassword()) {
+      // Should not happen if we persisted password, but safe check
+      message.error("请先设置保险库密码以解密");
+      return;
+  }
+
+  const action = isCurrentlySecure ? "解密" : "加密";
+  const loadingMsg = message.loading(`${action}中...`, { duration: 0 });
+
+  try {
+    await nexusStore.updateFileSecureStatus(nexusStore.selectedFileId, !isCurrentlySecure);
+    loadingMsg.destroy();
+    message.success(`文件已${action}`);
+  } catch (e) {
+    loadingMsg.destroy();
+    console.error(e);
+    message.error(`${action}失败`);
   }
 }
 
@@ -360,6 +401,33 @@ function handleEditorMount(editor: any) {
             保存 (Ctrl+S)
           </NTooltip>
         </NButtonGroup>
+
+        <div
+          v-if="selectedFile"
+          class="h-5 w-px"
+          :class="themeStore.isDark ? 'bg-slate-600' : 'bg-slate-300'"
+        ></div>
+
+         <NButtonGroup v-if="selectedFile" size="small">
+          <NTooltip trigger="hover">
+            <template #trigger>
+              <NButton
+                :quaternary="themeStore.isDark"
+                :tertiary="!themeStore.isDark"
+                @click="handleToggleSecure"
+                :type="selectedFile.isSecure ? 'success' : 'default'"
+              >
+                <template #icon>
+                  <div :class="[
+                      selectedFile.isSecure ? 'i-heroicons-lock-closed' : 'i-heroicons-lock-open',
+                      'w-4 h-4'
+                    ]"></div>
+                </template>
+              </NButton>
+            </template>
+            {{ selectedFile.isSecure ? "已加密 (点击解密)" : "未加密 (点击加密)" }}
+          </NTooltip>
+         </NButtonGroup>
 
         <!-- 分隔符 -->
         <div

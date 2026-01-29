@@ -575,5 +575,42 @@ export const useNexusStore = defineStore("nexus", () => {
     getFileHistory: async (fileId: string) => localHistoryRepository.getHistory(fileId),
     restoreFileContent,
     importRemoteHistory,
+    updateFileSecureStatus: async (fileId: string, isSecure: boolean) => {
+      if (!index.value || !config.value) return;
+
+      // 1. Update Index Entry
+      let itemFound = false;
+      for (const cat of index.value.categories) {
+        const item = cat.items.find((i) => i.id === fileId);
+        if (item) {
+          item.isSecure = isSecure;
+          itemFound = true;
+          break;
+        }
+      }
+      if (!itemFound) return;
+
+      // 2. Update Local Entity
+      const file = await fileRepository.get(fileId);
+      if (file) {
+        file.isSecure = isSecure;
+        // Ensure we mark it as dirty if we want to force push?
+        // Actually saveFileContent treats content update. 
+        // SyncService.pushFile encrypts based on isSecure. 
+        // We just need to trigger a push.
+        await fileRepository.save(file);
+      } else {
+        return;
+      }
+
+      // 3. Save Index (Metadata)
+      // This pushes the updated index with isSecure flag
+      await saveIndex();
+
+      // 4. Trigger Push for File (Content)
+      // We reuse saveFileContent which calls fileService.updateContent -> pushFile
+      // The content itself hasn't changed in memory (plain text), but on push it will be encrypted/decrypted.
+      await saveFileContent(fileId, file.content);
+    },
   };
 });
