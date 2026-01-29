@@ -15,14 +15,22 @@ export class LocalHistoryRepository {
     note?: string,
     timestamp?: string, // Optional custom timestamp
   ): Promise<number> {
-    // 简单的去重逻辑：如果最新一条记录内容相同，则不添加
-    // 注意：如果是导入历史（指定了 timestamp），则跳过去重检查，或者需要更复杂的检查
-    // 为简单起见，如果提供了 timestamp (import 模式)，我们假设调用者知道自己在做什么，或者只做基础去重
-    if (!timestamp) {
-        const lastEntry = await this.getLatestSnapshot(fileId);
-        if (lastEntry && lastEntry.content === content) {
-          return lastEntry.id!;
-        }
+    // 去重逻辑
+    if (timestamp) {
+      // 导入模式：基于 timestamp 去重，防止重复导入相同版本
+      const existing = await nexusDb.history
+        .where(["fileId", "timestamp"])
+        .equals([fileId, timestamp])
+        .first();
+      if (existing) {
+        return existing.id!;
+      }
+    } else {
+      // 正常模式：如果最新一条记录内容相同，则不添加
+      const lastEntry = await this.getLatestSnapshot(fileId);
+      if (lastEntry && lastEntry.content === content) {
+        return lastEntry.id!;
+      }
     }
 
     return await nexusDb.history.add({
@@ -44,11 +52,14 @@ export class LocalHistoryRepository {
       .where("fileId")
       .equals(fileId)
       .toArray();
-    
+
     // In-memory sort by timestamp descending (Newest first)
     return items
-        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-        .slice(0, limit);
+      .sort(
+        (a, b) =>
+          new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+      )
+      .slice(0, limit);
   }
 
   /**
@@ -89,13 +100,13 @@ export class LocalHistoryRepository {
 
     await nexusDb.history.bulkDelete(keysToDelete as number[]);
   }
-  
+
   /**
    * 删除文件所有历史
    */
-   async deleteFileHistory(fileId: string): Promise<void> {
-       await nexusDb.history.where("fileId").equals(fileId).delete();
-   }
+  async deleteFileHistory(fileId: string): Promise<void> {
+    await nexusDb.history.where("fileId").equals(fileId).delete();
+  }
 }
 
 export const localHistoryRepository = new LocalHistoryRepository();

@@ -31,7 +31,7 @@ export class NexusDatabase extends Dexie {
 
   constructor() {
     super("NexusDB");
-    
+
     // Version 2: Initial Schema
     this.version(2).stores({
       files: "id, gist_filename, title, *tags, is_dirty",
@@ -40,19 +40,20 @@ export class NexusDatabase extends Dexie {
     // Version 3: Add History
     this.version(3).stores({
       files: "id, gist_filename, title, *tags, is_dirty",
-      history: "++id, fileId, timestamp, type",
+      history: "++id, fileId, timestamp, type, [fileId+timestamp]",
     });
 
     // Version 4: Add is_secure
-    this.version(4).stores({
-      files: "id, gist_filename, title, *tags, is_dirty, is_secure",
-    }).upgrade(tx => {
-       // Upgrade script if needed, e.g. set default to false (0 or false)
-       return tx.table("files").toCollection().modify({ is_secure: 0 }); // Use 0 for false if we stick to number, or false.
-       // Let's stick to boolean in TS, Dexie handles it. But for upgrade modify, false is fine.
-    });
+    this.version(4)
+      .stores({
+        files: "id, gist_filename, title, *tags, is_dirty, is_secure",
+      })
+      .upgrade((tx) => {
+        // Upgrade script if needed, e.g. set default to false (0 or false)
+        return tx.table("files").toCollection().modify({ is_secure: 0 }); // Use 0 for false if we stick to number, or false.
+        // Let's stick to boolean in TS, Dexie handles it. But for upgrade modify, false is fine.
+      });
   }
 }
 
 export const nexusDb = new NexusDatabase();
-
