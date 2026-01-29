@@ -464,6 +464,16 @@ export const useNexusStore = defineStore("nexus", () => {
           // 删除本地 DB
           await fileRepository.delete(item.id);
 
+          // 删除历史记录
+          try {
+            await localHistoryRepository.deleteFileHistory(item.id);
+          } catch (historyErr) {
+            console.warn(
+              `[Nexus] Failed to cleanup history for ${item.id}`,
+              historyErr,
+            );
+          }
+
           // 删除远程文件
           await syncService.deleteRemoteFile(gistId, item.gist_file);
         } catch (e) {
@@ -598,6 +608,13 @@ export const useNexusStore = defineStore("nexus", () => {
     if (newRemoteTime) {
       remoteUpdatedAt.value = newRemoteTime;
       lastSyncedAt.value = new Date().toISOString();
+    }
+
+    // 清理历史记录
+    try {
+      await localHistoryRepository.deleteFileHistory(fileId);
+    } catch (e) {
+      console.warn(`[Nexus] Failed to cleanup history for ${fileId}`, e);
     }
 
     if (selectedFileId.value === fileId) {

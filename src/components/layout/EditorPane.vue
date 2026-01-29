@@ -17,6 +17,7 @@ import { VueMonacoEditor } from "@guolao/vue-monaco-editor";
 import VersionHistory from "./VersionHistory.vue";
 import { cryptoProvider } from "../../services";
 import { DECRYPTION_PENDING_PREFIX } from "../../core/application/services/SyncService";
+import { localHistoryRepository } from "../../infrastructure/storage/LocalHistoryRepository";
 
 const emit = defineEmits<{
   "open-search": [];
@@ -147,6 +148,50 @@ async function loadFileContent() {
     isLoadingContent.value = false;
   }
 }
+
+// 自动保存逻辑
+let autoSaveTimer: any = null;
+
+// 清理定时器
+const clearAutoSaveTimer = () => {
+  if (autoSaveTimer) {
+    clearTimeout(autoSaveTimer);
+    autoSaveTimer = null;
+  }
+};
+
+watch(code, (newVal) => {
+  // 基础条件检查
+  if (
+    !nexusStore.selectedFileId ||
+    isReadOnly.value ||
+    isLoadingContent.value ||
+    isDecryptionPending.value
+  ) {
+    return;
+  }
+
+  clearAutoSaveTimer();
+
+  // 仅在 isDirty 为 true 时才考虑自动保存 (由 VueMonacoEditor @change 触发 isDirty)
+  // 但这里 watch code 变化更直接。我们可以在 30s 后自动触发一次 "Auto Save" 快照
+  // 注意：这不是 savedFileContent (同步到 Gist)，这只是本地历史快照
+
+  autoSaveTimer = setTimeout(async () => {
+    if (!nexusStore.selectedFileId) return;
+    try {
+      await localHistoryRepository.addSnapshot(
+        nexusStore.selectedFileId,
+        newVal,
+        "auto",
+        "自动保存",
+      );
+      // 自动保存后不清除 isDirty，因为并未同步到云端
+    } catch (e) {
+      console.warn("Auto save failed", e);
+    }
+  }, 30000); // 30s debounce
+});
 
 // 监听语言变化，同步更改云端文件扩展名
 watch(language, async (newLang, oldLang) => {
