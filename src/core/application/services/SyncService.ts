@@ -10,12 +10,15 @@ import { NexusFile } from "../../domain/entities/NexusFile";
 import { calculateChecksum } from "../../domain/shared/Hash";
 import type { ICryptoProvider } from "../ports/ICryptoProvider";
 
+// 解密失败时的内容前缀标记，用于 UI 层识别待解密状态
+export const DECRYPTION_PENDING_PREFIX = "__NEXUS_DECRYPT_PENDING__";
+
 export class SyncService {
   constructor(
     private gistRepo: IGistRepository,
     private localStore: ILocalStore,
     private fileRepo: IFileRepository,
-    private cryptoProvider: ICryptoProvider
+    private cryptoProvider: ICryptoProvider,
   ) {}
 
   async initializeNexus(initialIndex: NexusIndex): Promise<string> {
@@ -94,10 +97,16 @@ export class SyncService {
 
         let nexusFile: NexusFile;
 
-        if (localFile && localFile.isDirty && localFile.checksum !== remoteChecksum) {
+        if (
+          localFile &&
+          localFile.isDirty &&
+          localFile.checksum !== remoteChecksum
+        ) {
           // 发生冲突: 本地已修改且内容与远程不同
-          console.warn(`[SyncService] 发现冲突: ${itemInfo.title} (${filename})`);
-          
+          console.warn(
+            `[SyncService] 发现冲突: ${itemInfo.title} (${filename})`,
+          );
+
           // 创建冲突副本
           const conflictId = `${itemInfo.id}_conflict_${Date.now().toString(36)}`;
           const conflictFile = new NexusFile(
@@ -110,7 +119,7 @@ export class SyncService {
             true, // 冲突文件本身也是 dirty 的，需要用户处理
             localFile.checksum,
             localFile.lastSyncedAt,
-            localFile.isSecure
+            localFile.isSecure,
           );
           conflictFiles.push(conflictFile);
 
@@ -118,10 +127,12 @@ export class SyncService {
           let finalRemoteContent = remoteContent;
           if (itemInfo.isSecure) {
             try {
-              finalRemoteContent = await this.cryptoProvider.decrypt(remoteContent);
+              finalRemoteContent =
+                await this.cryptoProvider.decrypt(remoteContent);
             } catch (e) {
               console.error(`Failed to decrypt ${filename}`, e);
-              finalRemoteContent = "Error: Decryption Failed";
+              // 保留原始密文，添加待解密前缀供 UI 识别
+              finalRemoteContent = DECRYPTION_PENDING_PREFIX + remoteContent;
             }
           }
 
@@ -136,17 +147,19 @@ export class SyncService {
             false,
             remoteChecksum,
             remoteTime,
-            !!itemInfo.isSecure
+            !!itemInfo.isSecure,
           );
         } else {
           // Decrypt remote content if secure
           let finalRemoteContent = remoteContent;
           if (itemInfo.isSecure) {
-             try {
-              finalRemoteContent = await this.cryptoProvider.decrypt(remoteContent);
+            try {
+              finalRemoteContent =
+                await this.cryptoProvider.decrypt(remoteContent);
             } catch (e) {
               console.error(`Failed to decrypt ${filename}`, e);
-              finalRemoteContent = "Error: Decryption Failed";
+              // 保留原始密文，添加待解密前缀供 UI 识别
+              finalRemoteContent = DECRYPTION_PENDING_PREFIX + remoteContent;
             }
           }
 
@@ -161,7 +174,7 @@ export class SyncService {
             false,
             remoteChecksum,
             remoteTime,
-            !!itemInfo.isSecure
+            !!itemInfo.isSecure,
           );
         }
         nexusFiles.push(nexusFile);
@@ -232,7 +245,7 @@ export class SyncService {
     let contentToPush = file.content;
     if (file.isSecure) {
       if (!this.cryptoProvider.hasPassword()) {
-         throw new Error("Vault password not set. Cannot push secure file.");
+        throw new Error("Vault password not set. Cannot push secure file.");
       }
       contentToPush = await this.cryptoProvider.encrypt(file.content);
     }
