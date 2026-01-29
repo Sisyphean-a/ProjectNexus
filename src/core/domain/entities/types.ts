@@ -28,6 +28,7 @@ export interface GistIndexItem {
   gist_file: string; // Filename in the Gist
   language: string;  // 语言类型（决定扩展名和语法高亮）
   tags?: string[];
+  isSecure?: boolean;
 }
 
 export interface GistIndexCategory {

@@ -2,6 +2,7 @@
 import { ref, computed, h } from "vue";
 import { useNexusStore } from "../../stores/useNexusStore";
 import { useThemeStore } from "../../stores/useThemeStore";
+import { cryptoProvider } from "../../services";
 import {
   NMenu,
   NButton,
@@ -31,6 +32,10 @@ const showContextMenu = ref(false);
 const contextMenuX = ref(0);
 const contextMenuY = ref(0);
 const contextMenuCategoryId = ref<string | null>(null);
+
+// Security Modal
+const showSecurityModal = ref(false);
+const vaultPasswordInput = ref("");
 
 // 编辑分类模态框
 const showEditModal = ref(false);
@@ -173,6 +178,18 @@ async function handleEditCategory() {
   }
 }
 
+// Security
+async function handleSaveSecurity() {
+  if (!vaultPasswordInput.value) {
+    message.warning("密码不能为空");
+    return;
+  }
+  await cryptoProvider.setPassword(vaultPasswordInput.value);
+  message.success("保险库密码已设置 (本设备)");
+  showSecurityModal.value = false;
+  vaultPasswordInput.value = "";
+}
+
 // 同步
 const isSyncing = ref(false);
 async function handleSync() {
@@ -258,6 +275,21 @@ async function handleSync() {
         新建分类
       </NButton>
 
+      <div class="flex gap-2">
+         <NButton
+          block
+          size="small"
+          :quaternary="themeStore.isDark"
+          :tertiary="!themeStore.isDark"
+          @click="showSecurityModal = true"
+        >
+          <template #icon>
+            <div class="i-heroicons-shield-check w-4 h-4"></div>
+          </template>
+          设置密码
+        </NButton>
+      </div>
+
       <div
         class="flex items-center justify-between text-xs"
         :class="themeStore.isDark ? 'text-slate-500' : 'text-slate-400'"
@@ -341,6 +373,28 @@ async function handleSync() {
         <NSpace>
           <NButton @click="showEditModal = false">取消</NButton>
           <NButton type="primary" @click="handleEditCategory">保存</NButton>
+        </NSpace>
+      </template>
+    </NModal>
+
+    <!-- 安全设置模态框 -->
+    <NModal v-model:show="showSecurityModal" preset="dialog" title="设置保险库密码">
+      <div class="space-y-4">
+        <p class="text-xs text-gray-500">
+          此密码用于加密/解密标记为“安全”的文件。密码仅存储在本地 (LocalStorage)。
+        </p>
+        <NInput
+          v-model:value="vaultPasswordInput"
+          type="password"
+          placeholder="输入新的保险库密码"
+          show-password-on="click"
+          @keydown.enter="handleSaveSecurity"
+        />
+      </div>
+      <template #action>
+        <NSpace>
+          <NButton @click="showSecurityModal = false">取消</NButton>
+          <NButton type="primary" @click="handleSaveSecurity">保存</NButton>
         </NSpace>
       </template>
     </NModal>

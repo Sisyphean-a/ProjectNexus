@@ -8,12 +8,14 @@ import type {
 } from "../../domain/entities/types";
 import { NexusFile } from "../../domain/entities/NexusFile";
 import { calculateChecksum } from "../../domain/shared/Hash";
+import type { ICryptoProvider } from "../ports/ICryptoProvider";
 
 export class SyncService {
   constructor(
     private gistRepo: IGistRepository,
     private localStore: ILocalStore,
     private fileRepo: IFileRepository,
+    private cryptoProvider: ICryptoProvider
   ) {}
 
   async initializeNexus(initialIndex: NexusIndex): Promise<string> {
@@ -107,34 +109,59 @@ export class SyncService {
             localFile.updatedAt,
             true, // 冲突文件本身也是 dirty 的，需要用户处理
             localFile.checksum,
-            localFile.lastSyncedAt
+            localFile.lastSyncedAt,
+            localFile.isSecure
           );
           conflictFiles.push(conflictFile);
+
+          // Decrypt remote content if secure
+          let finalRemoteContent = remoteContent;
+          if (itemInfo.isSecure) {
+            try {
+              finalRemoteContent = await this.cryptoProvider.decrypt(remoteContent);
+            } catch (e) {
+              console.error(`Failed to decrypt ${filename}`, e);
+              finalRemoteContent = "Error: Decryption Failed";
+            }
+          }
 
           // 保持 ID 不变，但更新为远程内容
           nexusFile = new NexusFile(
             itemInfo.id,
             itemInfo.title,
-            remoteContent,
+            finalRemoteContent,
             itemInfo.language,
             itemInfo.tags || [],
             remoteTime,
             false,
             remoteChecksum,
-            remoteTime
+            remoteTime,
+            !!itemInfo.isSecure
           );
         } else {
+          // Decrypt remote content if secure
+          let finalRemoteContent = remoteContent;
+          if (itemInfo.isSecure) {
+             try {
+              finalRemoteContent = await this.cryptoProvider.decrypt(remoteContent);
+            } catch (e) {
+              console.error(`Failed to decrypt ${filename}`, e);
+              finalRemoteContent = "Error: Decryption Failed";
+            }
+          }
+
           // 无冲突或本地无修改，直接更新/覆盖
           nexusFile = new NexusFile(
             itemInfo.id,
             itemInfo.title,
-            remoteContent,
+            finalRemoteContent,
             itemInfo.language,
             itemInfo.tags || [],
             remoteTime,
             false,
             remoteChecksum,
-            remoteTime
+            remoteTime,
+            !!itemInfo.isSecure
           );
         }
         nexusFiles.push(nexusFile);
@@ -202,10 +229,18 @@ export class SyncService {
   }
 
   async pushFile(gistId: string, file: NexusFile): Promise<string> {
+    let contentToPush = file.content;
+    if (file.isSecure) {
+      if (!this.cryptoProvider.hasPassword()) {
+         throw new Error("Vault password not set. Cannot push secure file.");
+      }
+      contentToPush = await this.cryptoProvider.encrypt(file.content);
+    }
+
     const newTime = await this.gistRepo.updateGistFile(
       gistId,
       file.filename,
-      file.content,
+      contentToPush,
     );
     // Mark clean locally
     file.markClean();

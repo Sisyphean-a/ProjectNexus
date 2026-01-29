@@ -14,9 +14,7 @@ import { crx } from "@crxjs/vite-plugin";
 import { resolve } from "path";
 import { readFileSync } from "fs";
 import packageJson from "./package.json";
-import _monacoEditorPlugin from "vite-plugin-monaco-editor";
-// @ts-expect-error: handle cjs/esm interop
-const monacoEditorPlugin = _monacoEditorPlugin.default || _monacoEditorPlugin;
+
 
 const manifest = JSON.parse(readFileSync("./src/manifest.json", "utf-8"));
 
@@ -70,12 +68,7 @@ export const sharedConfig: UserConfig = {
     // https://github.com/unocss/unocss
     UnoCSS(),
 
-    monacoEditorPlugin({
-      languageWorkers: ["editorWorkerService", "typescript", "json", "html", "css"],
-      customDistPath: (_root: string, buildOutDir: string) => {
-        return resolve(buildOutDir, "assets");
-      },
-    }),
+
 
     // CRXJS Vite Plugin - Only load if NOT web mode
     process.env.TARGET !== "web" && crx({ manifest }),
