@@ -7,4 +7,3 @@ declare module '*.vue' {
   export default component
 }
 
-declare module "monaco-editor/esm/vs/editor/editor.all.js";

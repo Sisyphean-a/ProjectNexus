@@ -130,9 +130,6 @@ export default defineConfig(({ command }) => ({
       },
       output: {
         manualChunks(id) {
-          if (id.includes("node_modules/monaco-editor")) {
-            return "monaco-editor";
-          }
           if (
             id.includes("node_modules/vue") ||
             id.includes("node_modules/pinia") ||

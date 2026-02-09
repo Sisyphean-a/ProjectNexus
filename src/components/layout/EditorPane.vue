@@ -15,12 +15,11 @@ import {
   useMessage,
   useDialog,
 } from "naive-ui";
-import { VueMonacoEditor } from "@guolao/vue-monaco-editor";
+import CodeMirrorEditor from "../CodeMirrorEditor.vue";
 import VersionHistory from "./VersionHistory.vue";
 import { cryptoProvider } from "../../services";
 import { DECRYPTION_PENDING_PREFIX } from "../../core/application/services/SyncService";
 import { localHistoryRepository } from "../../infrastructure/storage/LocalHistoryRepository";
-import { ensureMonaco } from "../../monaco/ensure";
 import { languageOptions } from "../../constants/languages";
 
 const emit = defineEmits<{
@@ -52,12 +51,8 @@ const language = ref("yaml");
 const isDirty = ref(false);
 const isLoadingContent = ref(false);
 const isReadOnly = ref(false);
-const isMonacoReady = ref(false);
-const isMonacoLoading = ref(false);
-const monacoLoadError = ref<string | null>(null);
 
-// Monaco 编辑器实例
-const editorRef = ref<any>(null);
+// 编辑器增强
 
 // 编辑器增强
 const fontSize = ref(14);
@@ -83,20 +78,7 @@ const isDecryptionPending = computed(() => {
   return code.value.startsWith(DECRYPTION_PENDING_PREFIX);
 });
 
-async function ensureMonacoReady() {
-  if (isMonacoReady.value || isMonacoLoading.value) return;
-  isMonacoLoading.value = true;
-  monacoLoadError.value = null;
-  try {
-    await ensureMonaco();
-    isMonacoReady.value = true;
-  } catch (e: any) {
-    console.error("[Monaco] Failed to load", e);
-    monacoLoadError.value = e?.message || String(e);
-  } finally {
-    isMonacoLoading.value = false;
-  }
-}
+
 
 function getSuffixFromFilename(filename: string): string {
   const lastDotIndex = filename.lastIndexOf(".");
@@ -200,12 +182,7 @@ watch(
   },
 );
 
-watch(
-  () => showHistoryPanel.value,
-  (show) => {
-    if (show) void ensureMonacoReady();
-  },
-);
+
 
 // 语言变更状态
 const isChangingLanguage = ref(false);
@@ -234,10 +211,7 @@ async function loadFileContent() {
 
     isDirty.value = false;
 
-    // Monaco 仅在真正需要渲染编辑器时才加载（避免首屏/未选中文件就引入大体积依赖）
-    if (!code.value.startsWith(DECRYPTION_PENDING_PREFIX)) {
-      void ensureMonacoReady();
-    }
+
   } catch (e) {
     console.error(e);
     message.error("加载内容失败");
@@ -422,32 +396,15 @@ function handleKeyDown(e: KeyboardEvent) {
   // Ctrl+G 跳转到行
   if ((e.ctrlKey || e.metaKey) && e.key === "g") {
     e.preventDefault();
-    triggerEditorAction("editor.action.gotoLine");
-  }
-  // Ctrl+H 替换
-  if ((e.ctrlKey || e.metaKey) && e.key === "h") {
-    e.preventDefault();
-    triggerEditorAction("editor.action.startFindReplaceAction");
   }
 }
-
-// 触发 Monaco 编辑器内置操作
-function triggerEditorAction(actionId: string) {
-  if (editorRef.value) {
-    editorRef.value.trigger("keyboard", actionId);
-  }
-}
-
 // 恢复历史版本
 function handleRestoreVersion(content: string) {
   code.value = content;
   isDirty.value = true;
 }
 
-// 编辑器加载完成
-function handleEditorMount(editor: any) {
-  editorRef.value = editor;
-}
+
 </script>
 
 <template>
@@ -696,50 +653,15 @@ function handleEditorMount(editor: any) {
         </div>
       </div>
 
-      <div
-        v-else-if="!isDecryptionPending && !isMonacoReady"
-        class="absolute inset-0 flex items-center justify-center"
-        :class="themeStore.isDark ? 'text-slate-400' : 'text-slate-500'"
-      >
-        <div class="text-center max-w-md p-6">
-          <div
-            class="i-heroicons-arrow-path animate-spin w-10 h-10 mx-auto mb-4 text-blue-500"
-          ></div>
-          <p class="text-lg font-medium mb-2">正在加载编辑器...</p>
-          <p
-            v-if="monacoLoadError"
-            class="text-sm mb-4"
-            :class="themeStore.isDark ? 'text-slate-500' : 'text-slate-400'"
-          >
-            {{ monacoLoadError }}
-          </p>
-          <NButton v-if="monacoLoadError" size="small" @click="ensureMonacoReady">
-            重试
-          </NButton>
-        </div>
-      </div>
-
-      <VueMonacoEditor
-        v-else-if="!isDecryptionPending && isMonacoReady"
-        v-model:value="code"
+      <CodeMirrorEditor
+        v-else-if="!isDecryptionPending"
+        v-model="code"
         :language="language"
-        :theme="themeStore.isDark ? 'vs-dark' : 'vs'"
-        :options="{
-          automaticLayout: true,
-          fontSize: fontSize,
-          fontFamily: 'Fira Code, Consolas, monospace',
-          minimap: { enabled: true },
-          scrollBeyondLastLine: false,
-          padding: { top: 16 },
-          readOnly: isReadOnly,
-          wordWrap: 'on',
-          lineNumbers: 'on',
-          renderLineHighlight: 'all',
-          cursorBlinking: 'smooth',
-          smoothScrolling: true,
-        }"
+        :theme="themeStore.isDark ? 'dark' : 'light'"
+        :font-size="fontSize"
+        :read-only="isReadOnly"
+        @save="handleSave"
         @change="isDirty = true"
-        @mount="handleEditorMount"
         class="h-full w-full"
       />
 
