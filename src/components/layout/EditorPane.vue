@@ -10,6 +10,8 @@ import {
   NButtonGroup,
   NSlider,
   NPopover,
+  NModal,
+  NInput,
   useMessage,
   useDialog,
 } from "naive-ui";
@@ -55,6 +57,11 @@ const editorRef = ref<any>(null);
 // 编辑器增强
 const fontSize = ref(14);
 const showHistoryPanel = ref(false);
+const showExportModal = ref(false);
+const exportBaseName = ref("");
+const exportExtension = ref("");
+const isExporting = ref(false);
+const exportNameInputRef = ref<InstanceType<typeof NInput> | null>(null);
 
 // 语言选项
 const languageOptions = [
@@ -85,6 +92,79 @@ const selectedFile = computed(() => {
 const isDecryptionPending = computed(() => {
   return code.value.startsWith(DECRYPTION_PENDING_PREFIX);
 });
+
+function getSuffixFromFilename(filename: string): string {
+  const lastDotIndex = filename.lastIndexOf(".");
+  if (lastDotIndex <= 0 || lastDotIndex === filename.length - 1) return "";
+  return filename.slice(lastDotIndex + 1);
+}
+
+function sanitizeExtension(rawExtension: string): string {
+  return rawExtension
+    .trim()
+    .replace(/^\.+/, "")
+    .replace(/[^a-zA-Z0-9_-]/g, "");
+}
+
+function sanitizeBaseName(rawName: string): string {
+  return rawName.trim().replace(/[\\/:*?"<>|]/g, "_");
+}
+
+async function openExportModal() {
+  if (!selectedFile.value) return;
+
+  exportBaseName.value = selectedFile.value.title?.trim() || "untitled";
+  exportExtension.value = getSuffixFromFilename(selectedFile.value.gist_file || "");
+  showExportModal.value = true;
+
+  await nextTick();
+  exportNameInputRef.value?.focus();
+}
+
+async function confirmExport() {
+  if (isExporting.value) return;
+
+  isExporting.value = true;
+  try {
+    const finalBaseName = sanitizeBaseName(exportBaseName.value) || "untitled";
+    const finalExtension = sanitizeExtension(exportExtension.value);
+    const finalFilename = finalExtension
+      ? `${finalBaseName}.${finalExtension}`
+      : finalBaseName;
+
+    const blob = new Blob([code.value ?? ""], {
+      type: "text/plain;charset=utf-8",
+    });
+    const downloadUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+
+    anchor.href = downloadUrl;
+    anchor.download = finalFilename;
+    anchor.style.display = "none";
+
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(downloadUrl);
+
+    showExportModal.value = false;
+    message.success("已导出文件");
+  } catch (e) {
+    console.error(e);
+    message.error("导出失败");
+  } finally {
+    isExporting.value = false;
+  }
+}
+
+function handleExportModalKeyDown(e: KeyboardEvent) {
+  if (!showExportModal.value || e.isComposing) return;
+
+  if (e.key === "Enter") {
+    e.preventDefault();
+    confirmExport();
+  }
+}
 
 // 监听选择变化并加载内容
 watch(
@@ -471,6 +551,21 @@ function handleEditorMount(editor: any) {
           <NTooltip trigger="hover">
             <template #trigger>
               <NButton
+                :quaternary="themeStore.isDark"
+                :tertiary="!themeStore.isDark"
+                @click="openExportModal"
+              >
+                <template #icon>
+                  <div class="i-heroicons-arrow-down-tray w-4 h-4"></div>
+                </template>
+              </NButton>
+            </template>
+            导出为文件
+          </NTooltip>
+
+          <NTooltip trigger="hover">
+            <template #trigger>
+              <NButton
                 type="primary"
                 :disabled="!isDirty || isReadOnly"
                 @click="handleSave"
@@ -667,6 +762,61 @@ function handleEditorMount(editor: any) {
     </div>
 
     <!-- 版本历史面板 -->
+    <NModal
+      v-model:show="showExportModal"
+      preset="card"
+      title="导出为文件"
+      size="small"
+      style="width: 420px; max-width: 90vw"
+      :mask-closable="false"
+      @keydown="handleExportModalKeyDown"
+    >
+      <div class="space-y-3">
+        <div class="space-y-1">
+          <div
+            class="text-xs"
+            :class="themeStore.isDark ? 'text-slate-400' : 'text-slate-500'"
+          >
+            文件名称
+          </div>
+          <NInput
+            ref="exportNameInputRef"
+            v-model:value="exportBaseName"
+            placeholder="请输入文件名称"
+          />
+        </div>
+
+        <div class="space-y-1">
+          <div
+            class="text-xs"
+            :class="themeStore.isDark ? 'text-slate-400' : 'text-slate-500'"
+          >
+            类型（后缀）
+          </div>
+          <NInput
+            v-model:value="exportExtension"
+            placeholder="例如 json / yaml / txt"
+          />
+        </div>
+
+        <div
+          class="text-xs"
+          :class="themeStore.isDark ? 'text-slate-500' : 'text-slate-400'"
+        >
+          提示：按 Enter 可直接确认导出
+        </div>
+      </div>
+
+      <template #footer>
+        <div class="flex justify-end gap-2">
+          <NButton @click="showExportModal = false">取消</NButton>
+          <NButton type="primary" :loading="isExporting" @click="confirmExport">
+            确认导出
+          </NButton>
+        </div>
+      </template>
+    </NModal>
+
     <VersionHistory
       v-model:show="showHistoryPanel"
       :filename="selectedFile?.gist_file || ''"
