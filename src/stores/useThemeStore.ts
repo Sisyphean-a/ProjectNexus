@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, computed, watch } from 'vue'
+import { ref, computed } from 'vue'
 import { localStoreRepository } from '../infrastructure'
 
 export type ThemeMode = 'dark' | 'light' | 'auto'

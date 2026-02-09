@@ -16,6 +16,10 @@ const defaultConfig: NexusConfig = {
 
 export class LocalStoreRepository implements ILocalStore {
   private isExtension: boolean
+  private configCache: NexusConfig | null = null
+  private configPromise: Promise<NexusConfig> | null = null
+  private indexCache: NexusIndex | null = null
+  private indexPromise: Promise<NexusIndex | null> | null = null
 
   constructor() {
     this.isExtension = typeof chrome !== 'undefined' && !!chrome.storage
@@ -40,20 +44,51 @@ export class LocalStoreRepository implements ILocalStore {
   }
 
   async getConfig(): Promise<NexusConfig> {
-    const config = await this.get(CONFIG_KEY)
-    return { ...defaultConfig, ...config }
+    if (this.configCache) {
+      return { ...this.configCache }
+    }
+
+    if (!this.configPromise) {
+      this.configPromise = (async () => {
+        const config = await this.get(CONFIG_KEY)
+        const merged = { ...defaultConfig, ...config }
+        this.configCache = merged
+        return merged
+      })().finally(() => {
+        this.configPromise = null
+      })
+    }
+
+    return { ...(await this.configPromise) }
   }
 
   async saveConfig(config: Partial<NexusConfig>): Promise<void> {
     const current = await this.getConfig()
-    await this.set(CONFIG_KEY, { ...current, ...config })
+    const next = { ...current, ...config }
+    this.configCache = next
+    await this.set(CONFIG_KEY, next)
   }
 
   async getIndex(): Promise<NexusIndex | null> {
-    return (await this.get(INDEX_KEY)) || null
+    if (this.indexCache) {
+      return this.indexCache
+    }
+
+    if (!this.indexPromise) {
+      this.indexPromise = (async () => {
+        const index = (await this.get(INDEX_KEY)) || null
+        this.indexCache = index
+        return index
+      })().finally(() => {
+        this.indexPromise = null
+      })
+    }
+
+    return await this.indexPromise
   }
 
   async saveIndex(index: NexusIndex): Promise<void> {
+    this.indexCache = index
     await this.set(INDEX_KEY, index)
   }
 

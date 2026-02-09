@@ -20,6 +20,8 @@ import VersionHistory from "./VersionHistory.vue";
 import { cryptoProvider } from "../../services";
 import { DECRYPTION_PENDING_PREFIX } from "../../core/application/services/SyncService";
 import { localHistoryRepository } from "../../infrastructure/storage/LocalHistoryRepository";
+import { ensureMonaco } from "../../monaco/ensure";
+import { languageOptions } from "../../constants/languages";
 
 const emit = defineEmits<{
   "open-search": [];
@@ -50,6 +52,9 @@ const language = ref("yaml");
 const isDirty = ref(false);
 const isLoadingContent = ref(false);
 const isReadOnly = ref(false);
+const isMonacoReady = ref(false);
+const isMonacoLoading = ref(false);
+const monacoLoadError = ref<string | null>(null);
 
 // Monaco 编辑器实例
 const editorRef = ref<any>(null);
@@ -62,21 +67,6 @@ const exportBaseName = ref("");
 const exportExtension = ref("");
 const isExporting = ref(false);
 const exportNameInputRef = ref<InstanceType<typeof NInput> | null>(null);
-
-// 语言选项
-const languageOptions = [
-  { label: "YAML", value: "yaml" },
-  { label: "JSON", value: "json" },
-  { label: "Markdown", value: "markdown" },
-  { label: "JavaScript", value: "javascript" },
-  { label: "TypeScript", value: "typescript" },
-  { label: "Python", value: "python" },
-  { label: "HTML", value: "html" },
-  { label: "CSS", value: "css" },
-  { label: "Shell", value: "shell" },
-  { label: "XML", value: "xml" },
-  { label: "纯文本", value: "plaintext" },
-];
 
 // 选中的文件
 const selectedFile = computed(() => {
@@ -92,6 +82,21 @@ const selectedFile = computed(() => {
 const isDecryptionPending = computed(() => {
   return code.value.startsWith(DECRYPTION_PENDING_PREFIX);
 });
+
+async function ensureMonacoReady() {
+  if (isMonacoReady.value || isMonacoLoading.value) return;
+  isMonacoLoading.value = true;
+  monacoLoadError.value = null;
+  try {
+    await ensureMonaco();
+    isMonacoReady.value = true;
+  } catch (e: any) {
+    console.error("[Monaco] Failed to load", e);
+    monacoLoadError.value = e?.message || String(e);
+  } finally {
+    isMonacoLoading.value = false;
+  }
+}
 
 function getSuffixFromFilename(filename: string): string {
   const lastDotIndex = filename.lastIndexOf(".");
@@ -195,6 +200,13 @@ watch(
   },
 );
 
+watch(
+  () => showHistoryPanel.value,
+  (show) => {
+    if (show) void ensureMonacoReady();
+  },
+);
+
 // 语言变更状态
 const isChangingLanguage = ref(false);
 const isProgrammaticUpdate = ref(false);
@@ -221,6 +233,11 @@ async function loadFileContent() {
     isProgrammaticUpdate.value = false;
 
     isDirty.value = false;
+
+    // Monaco 仅在真正需要渲染编辑器时才加载（避免首屏/未选中文件就引入大体积依赖）
+    if (!code.value.startsWith(DECRYPTION_PENDING_PREFIX)) {
+      void ensureMonacoReady();
+    }
   } catch (e) {
     console.error(e);
     message.error("加载内容失败");
@@ -679,8 +696,31 @@ function handleEditorMount(editor: any) {
         </div>
       </div>
 
+      <div
+        v-else-if="!isDecryptionPending && !isMonacoReady"
+        class="absolute inset-0 flex items-center justify-center"
+        :class="themeStore.isDark ? 'text-slate-400' : 'text-slate-500'"
+      >
+        <div class="text-center max-w-md p-6">
+          <div
+            class="i-heroicons-arrow-path animate-spin w-10 h-10 mx-auto mb-4 text-blue-500"
+          ></div>
+          <p class="text-lg font-medium mb-2">正在加载编辑器...</p>
+          <p
+            v-if="monacoLoadError"
+            class="text-sm mb-4"
+            :class="themeStore.isDark ? 'text-slate-500' : 'text-slate-400'"
+          >
+            {{ monacoLoadError }}
+          </p>
+          <NButton v-if="monacoLoadError" size="small" @click="ensureMonacoReady">
+            重试
+          </NButton>
+        </div>
+      </div>
+
       <VueMonacoEditor
-        v-else-if="!isDecryptionPending"
+        v-else-if="!isDecryptionPending && isMonacoReady"
         v-model:value="code"
         :language="language"
         :theme="themeStore.isDark ? 'vs-dark' : 'vs'"

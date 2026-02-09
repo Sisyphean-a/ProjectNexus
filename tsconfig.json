@@ -1,6 +1,7 @@
 {
   "compilerOptions": {
-    "incremental": false,
+    "incremental": true,
+    "tsBuildInfoFile": "node_modules/.cache/tsconfig.tsbuildinfo",
     "target": "es2016",
     "jsx": "preserve",
     "lib": ["DOM", "ESNext"],

@@ -14,6 +14,7 @@ import { VueMonacoDiffEditor } from "@guolao/vue-monaco-editor";
 import { gistRepository } from "../../infrastructure";
 import { useNexusStore } from "../../stores/useNexusStore";
 import { useThemeStore } from "../../stores/useThemeStore";
+import { ensureMonaco } from "../../monaco/ensure";
 import type { GistHistoryEntry } from "../../core/domain/entities/types";
 import type { HistoryEntry } from "../../infrastructure/db/NexusDatabase";
 
@@ -59,12 +60,39 @@ const selectedVersionId = ref<string | number | null>(null);
 const originalContent = ref(""); // The 'original' content for diff (History Version)
 const modifiedContent = ref(""); // The 'modified' content for diff (Current Version)
 
+const isMonacoReady = ref(false);
+const isMonacoLoading = ref(false);
+const monacoLoadError = ref<string | null>(null);
+
 // Monaco Diff Editor
 const diffEditorRef = shallowRef();
 
 function handleMount(diffEditor: any) {
   diffEditorRef.value = diffEditor;
 }
+
+async function ensureMonacoReady() {
+  if (isMonacoReady.value || isMonacoLoading.value) return;
+  isMonacoLoading.value = true;
+  monacoLoadError.value = null;
+  try {
+    await ensureMonaco();
+    isMonacoReady.value = true;
+  } catch (e: any) {
+    console.error("[Monaco] Failed to load", e);
+    monacoLoadError.value = e?.message || String(e);
+  } finally {
+    isMonacoLoading.value = false;
+  }
+}
+
+watch(
+  () => props.show,
+  (show) => {
+    if (show) void ensureMonacoReady();
+  },
+  { immediate: true },
+);
 
 // Load Local History
 async function loadLocalHistory() {
@@ -426,7 +454,33 @@ function formatTime(dateStr: string) {
             </div>
           </div>
 
+          <div v-if="!isMonacoReady" class="absolute inset-0">
+            <div class="h-full w-full flex items-center justify-center">
+              <div class="text-center px-6">
+                <NSpin size="large" />
+                <div class="mt-3 text-sm text-gray-500 dark:text-gray-400">
+                  正在加载对比编辑器...
+                </div>
+                <div
+                  v-if="monacoLoadError"
+                  class="mt-2 text-xs text-red-500 break-all"
+                >
+                  {{ monacoLoadError }}
+                </div>
+                <NButton
+                  v-if="monacoLoadError"
+                  class="mt-3"
+                  size="small"
+                  @click="ensureMonacoReady"
+                >
+                  重试
+                </NButton>
+              </div>
+            </div>
+          </div>
+
           <VueMonacoDiffEditor
+            v-else
             :original="originalContent"
             :modified="modifiedContent"
             :language="props.language || 'yaml'"

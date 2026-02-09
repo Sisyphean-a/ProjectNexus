@@ -12,8 +12,7 @@ const nexusStore = useNexusStore()
 const themeStore = useThemeStore()
 
 onMounted(async () => {
-  await themeStore.init()
-  await authStore.init()
+  await Promise.all([themeStore.init(), authStore.init()])
   if (authStore.isAuthenticated) {
     await nexusStore.init()
     // 初始化后自动从远程同步最新数据

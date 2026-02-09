@@ -1,5 +1,4 @@
 import { GistRepository } from "../src/infrastructure/github/GistRepository";
-import { IGistRepository } from "../src/core/application/ports/IGistRepository";
 
 async function main() {
   const token = process.env.GITHUB_TOKEN;
