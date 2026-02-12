@@ -3,9 +3,14 @@
   "displayName": "Vitesse WebExt",
   "version": "0.0.1",
   "private": true,
-  "packageManager": "pnpm@9.7.1",
+  "packageManager": "npm@11.6.2",
   "description": "[description]",
+  "engines": {
+    "node": ">=18.18.0",
+    "npm": ">=9.0.0"
+  },
   "scripts": {
+    "preinstall": "node scripts/ensure-npm.cjs",
     "dev": "vite",
     "dev:web": "cross-env TARGET=web vite",
     "build": "vite build",
