@@ -4,12 +4,7 @@ import { MergeView } from "@codemirror/merge";
 import { Compartment } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { oneDark } from "@codemirror/theme-one-dark";
-import { javascript } from "@codemirror/lang-javascript";
-import { json } from "@codemirror/lang-json";
-import { html } from "@codemirror/lang-html";
-import { css } from "@codemirror/lang-css";
-import { yaml } from "@codemirror/lang-yaml";
-import { markdown } from "@codemirror/lang-markdown";
+import { getCodeMirrorLanguageExtension } from "./codemirror/languageExtensions";
 
 const props = defineProps<{
   original: string;
@@ -24,30 +19,6 @@ let mergeView: MergeView | null = null;
 const languageCompartment = new Compartment();
 const themeCompartment = new Compartment();
 
-const getLanguageExtension = (lang: string = "") => {
-  switch (lang.toLowerCase()) {
-    case "javascript":
-    case "js":
-    case "typescript":
-    case "ts":
-      return javascript();
-    case "json":
-      return json();
-    case "html":
-      return html();
-    case "css":
-      return css();
-    case "yaml":
-    case "yml":
-      return yaml();
-    case "markdown":
-    case "md":
-      return markdown();
-    default:
-      return [];
-  }
-};
-
 onMounted(() => {
   if (!containerRef.value) return;
 
@@ -57,7 +28,7 @@ onMounted(() => {
       extensions: [
         EditorView.editable.of(false),
         EditorView.lineWrapping,
-        languageCompartment.of(getLanguageExtension(props.language)),
+        languageCompartment.of(getCodeMirrorLanguageExtension(props.language)),
         themeCompartment.of(props.theme === "dark" ? oneDark : []),
       ],
     },
@@ -66,7 +37,7 @@ onMounted(() => {
       extensions: [
         EditorView.editable.of(false),
         EditorView.lineWrapping,
-        languageCompartment.of(getLanguageExtension(props.language)),
+        languageCompartment.of(getCodeMirrorLanguageExtension(props.language)),
         themeCompartment.of(props.theme === "dark" ? oneDark : []),
       ],
     },
@@ -97,7 +68,7 @@ watch(
             extensions: [
                 EditorView.editable.of(false),
                 EditorView.lineWrapping,
-                languageCompartment.of(getLanguageExtension(props.language)),
+                languageCompartment.of(getCodeMirrorLanguageExtension(props.language)),
                 themeCompartment.of(props.theme === "dark" ? oneDark : []),
             ],
             },
@@ -106,7 +77,7 @@ watch(
             extensions: [
                 EditorView.editable.of(false),
                 EditorView.lineWrapping,
-                languageCompartment.of(getLanguageExtension(props.language)),
+                languageCompartment.of(getCodeMirrorLanguageExtension(props.language)),
                 themeCompartment.of(props.theme === "dark" ? oneDark : []),
             ],
             },
@@ -123,6 +94,16 @@ watch(
         const themeExt = newTheme === "dark" ? oneDark : [];
         mergeView.a.dispatch({ effects: themeCompartment.reconfigure(themeExt) });
         mergeView.b.dispatch({ effects: themeCompartment.reconfigure(themeExt) });
+    }
+)
+
+watch(
+    () => props.language,
+    (newLanguage) => {
+        if (!mergeView) return;
+        const languageExt = getCodeMirrorLanguageExtension(newLanguage);
+        mergeView.a.dispatch({ effects: languageCompartment.reconfigure(languageExt) });
+        mergeView.b.dispatch({ effects: languageCompartment.reconfigure(languageExt) });
     }
 )
 

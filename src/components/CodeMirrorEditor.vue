@@ -4,14 +4,9 @@ import { Codemirror } from "vue-codemirror";
 import { EditorView, keymap } from "@codemirror/view";
 import { EditorState } from "@codemirror/state";
 import { oneDark } from "@codemirror/theme-one-dark";
-import { javascript } from "@codemirror/lang-javascript";
-import { json } from "@codemirror/lang-json";
-import { html } from "@codemirror/lang-html";
-import { css } from "@codemirror/lang-css";
-import { yaml } from "@codemirror/lang-yaml";
-import { markdown } from "@codemirror/lang-markdown";
 import { defaultKeymap, historyKeymap } from "@codemirror/commands";
 import { searchKeymap } from "@codemirror/search";
+import { getCodeMirrorLanguageExtension } from "./codemirror/languageExtensions";
 
 const props = defineProps<{
   modelValue: string;
@@ -26,31 +21,6 @@ const emit = defineEmits<{
   (e: "save"): void;
   (e: "change", value: string): void;
 }>();
-
-// Language mapping
-const getLanguageExtension = (lang: string = "") => {
-  switch (lang.toLowerCase()) {
-    case "javascript":
-    case "js":
-    case "typescript":
-    case "ts":
-      return javascript();
-    case "json":
-      return json();
-    case "html":
-      return html();
-    case "css":
-      return css();
-    case "yaml":
-    case "yml":
-      return yaml();
-    case "markdown":
-    case "md":
-      return markdown();
-    default:
-      return [];
-  }
-};
 
 // Custom keymap
 const customKeymap = keymap.of([
@@ -70,7 +40,7 @@ const extensions = computed(() => {
   const exts = [
     customKeymap,
     EditorView.lineWrapping,
-    getLanguageExtension(props.language),
+    getCodeMirrorLanguageExtension(props.language),
     EditorState.readOnly.of(props.readOnly || false),
   ];
   
