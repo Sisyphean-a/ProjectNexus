@@ -4,11 +4,16 @@ import type {
   GistFile,
   GistHistoryEntry,
   NexusIndex,
+  ShardDescriptor,
+  ShardManifest,
 } from "../../core/domain/entities/types";
 
 const NEXUS_GIST_DESCRIPTION =
   "Nexus Configuration Index - Do not edit manually if possible";
 const NEXUS_INDEX_FILENAME = "nexus_index.json";
+const NEXUS_INDEX_V2_FILENAME = "nexus_index_v2.json";
+const NEXUS_SHARDS_FILENAME = "nexus_shards.json";
+const SHARD_MANIFEST_FILENAME = "shard_manifest.json";
 
 interface GithubGistFile {
   filename?: string;
@@ -51,9 +56,15 @@ export class GistRepository implements IGistRepository {
   }
 
   private updateRateLimit(headers: Headers | any) {
-    const limit = headers.get ? headers.get("x-ratelimit-limit") : headers["x-ratelimit-limit"];
-    const remaining = headers.get ? headers.get("x-ratelimit-remaining") : headers["x-ratelimit-remaining"];
-    const reset = headers.get ? headers.get("x-ratelimit-reset") : headers["x-ratelimit-reset"];
+    const limit = headers.get
+      ? headers.get("x-ratelimit-limit")
+      : headers["x-ratelimit-limit"];
+    const remaining = headers.get
+      ? headers.get("x-ratelimit-remaining")
+      : headers["x-ratelimit-remaining"];
+    const reset = headers.get
+      ? headers.get("x-ratelimit-reset")
+      : headers["x-ratelimit-reset"];
 
     if (limit) this.rateLimit.limit = parseInt(limit);
     if (remaining) this.rateLimit.remaining = parseInt(remaining);
@@ -70,7 +81,10 @@ export class GistRepository implements IGistRepository {
     } catch (e: any) {
       const isRateLimit = e.status === 403 || e.status === 429;
       if (isRateLimit && retries > 0) {
-        console.warn(`[GistRepository] Rate limited, retry in ${delay}ms...`, e.message);
+        console.warn(
+          `[GistRepository] Rate limited, retry in ${delay}ms...`,
+          e.message,
+        );
         await new Promise((resolve) => setTimeout(resolve, delay));
         return this.requestWithRetry(fn, retries - 1, delay * 2);
       }
@@ -78,12 +92,51 @@ export class GistRepository implements IGistRepository {
     }
   }
 
-  // ... (fetchGist, findNexusGist, createNexusGist remain unchanged)
+  private async fetchRawContent(rawUrl: string): Promise<string> {
+    const response = await fetch(rawUrl, {
+      headers: {
+        Authorization: `token ${this._token}`,
+        Accept: "application/vnd.github.v3.raw",
+      },
+    });
+
+    this.updateRateLimit(response.headers);
+
+    if (!response.ok) {
+      const error: any = new Error(`Raw file fetch failed: ${response.status}`);
+      error.status = response.status;
+      throw error;
+    }
+
+    return response.text();
+  }
+
+  private async normalizeFile(
+    filename: string,
+    file: GithubGistFile,
+    gistUpdatedAt?: string,
+  ): Promise<GistFile> {
+    let content = file.content || "";
+
+    if (file.truncated && file.raw_url) {
+      content = await this.fetchRawContent(file.raw_url);
+    }
+
+    return {
+      id: filename,
+      filename,
+      content,
+      language: file.language || undefined,
+      updated_at: gistUpdatedAt,
+    };
+  }
 
   async fetchGist(gistId: string): Promise<any> {
     this.ensureAuth();
     return this.requestWithRetry(async () => {
-      const { data, headers } = await this.octokit!.rest.gists.get({ gist_id: gistId });
+      const { data, headers } = await this.octokit!.rest.gists.get({
+        gist_id: gistId,
+      });
       this.updateRateLimit(headers);
       return data;
     });
@@ -97,7 +150,8 @@ export class GistRepository implements IGistRepository {
       const gist = data.find(
         (g: any) =>
           g.description === NEXUS_GIST_DESCRIPTION ||
-          (g.files && g.files[NEXUS_INDEX_FILENAME]),
+          (g.files &&
+            (g.files[NEXUS_INDEX_FILENAME] || g.files[NEXUS_INDEX_V2_FILENAME])),
       );
       return gist ? gist.id : null;
     });
@@ -105,18 +159,79 @@ export class GistRepository implements IGistRepository {
 
   async createNexusGist(initialIndex: NexusIndex): Promise<string> {
     this.ensureAuth();
-    const { data } = await this.octokit!.rest.gists.create({
-      description: NEXUS_GIST_DESCRIPTION,
-      public: false,
-      files: {
-        [NEXUS_INDEX_FILENAME]: {
-          content: JSON.stringify(initialIndex, null, 2),
-        },
-        "README.md": {
-          content: "# Nexus Configuration\nManaged by Nexus Extension.",
-        },
+
+    const isV2 = (initialIndex.version || 1) >= 2;
+    const files: Record<string, { content: string }> = {
+      "README.md": {
+        content: "# Nexus Configuration\nManaged by Nexus Extension.",
       },
-    });
+    };
+
+    if (isV2) {
+      files[NEXUS_INDEX_V2_FILENAME] = {
+        content: JSON.stringify(initialIndex, null, 2),
+      };
+      files[NEXUS_SHARDS_FILENAME] = {
+        content: JSON.stringify(initialIndex.shards || [], null, 2),
+      };
+    } else {
+      files[NEXUS_INDEX_FILENAME] = {
+        content: JSON.stringify(initialIndex, null, 2),
+      };
+    }
+
+    const { data, headers } = await this.requestWithRetry(async () =>
+      this.octokit!.rest.gists.create({
+        description: NEXUS_GIST_DESCRIPTION,
+        public: false,
+        files,
+      }),
+    );
+    this.updateRateLimit(headers);
+    return data.id!;
+  }
+
+  async createShardGist(
+    shardId: string,
+    categoryName: string,
+    part: number,
+    categoryId?: string,
+    kind: "category" | "large" = "category",
+  ): Promise<string> {
+    this.ensureAuth();
+
+    const initialManifest: ShardManifest = {
+      version: 1,
+      shardId,
+      updated_at: new Date().toISOString(),
+      files: [],
+    };
+
+    const { data, headers } = await this.requestWithRetry(async () =>
+      this.octokit!.rest.gists.create({
+        description: `Nexus Shard [${kind}] ${categoryName} (${categoryId || "N/A"}) #${part}`,
+        public: false,
+        files: {
+          [SHARD_MANIFEST_FILENAME]: {
+            content: JSON.stringify(initialManifest, null, 2),
+          },
+          "README.md": {
+            content: `# Nexus Shard
+
+[${kind}] ${categoryName} · Part ${part}
+
+| Key | Value |
+| --- | --- |
+| Shard | ${shardId} |
+| Category | ${categoryName} (${categoryId || "N/A"}) |
+| Status | Initial |
+`,
+          },
+        },
+      }),
+    );
+
+    this.updateRateLimit(headers);
     return data.id!;
   }
 
@@ -126,52 +241,36 @@ export class GistRepository implements IGistRepository {
   ): Promise<string> {
     this.ensureAuth();
 
-    // Prepare payload
     const fileUpdates: Record<string, { content?: string } | null> = {};
     for (const [filename, content] of Object.entries(files)) {
       fileUpdates[filename] = content === null ? null : { content };
     }
 
     const payload = {
-      description: NEXUS_GIST_DESCRIPTION, // Optional but good practice to keep desc updated
       files: fileUpdates,
     };
 
-    console.log(
-      "[GistRepository] updateBatch (fetch) payload:",
-      JSON.stringify(payload, null, 2),
-    );
-
-    try {
-      const response = await this.requestWithRetry(async () => {
-        const res = await fetch(`https://api.github.com/gists/${gistId}`, {
-          method: "PATCH",
-          headers: {
-            Authorization: `token ${this._token}`,
-            Accept: "application/vnd.github.v3+json",
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(payload),
-        });
-        this.updateRateLimit(res.headers);
-        if (!res.ok) {
-           const error: any = new Error(`Gist Update Failed: ${res.status}`);
-           error.status = res.status;
-           throw error;
-        }
-        return res;
+    const response = await this.requestWithRetry(async () => {
+      const res = await fetch(`https://api.github.com/gists/${gistId}`, {
+        method: "PATCH",
+        headers: {
+          Authorization: `token ${this._token}`,
+          Accept: "application/vnd.github.v3+json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
       });
+      this.updateRateLimit(res.headers);
+      if (!res.ok) {
+        const error: any = new Error(`Gist Update Failed: ${res.status}`);
+        error.status = res.status;
+        throw error;
+      }
+      return res;
+    });
 
-      const data = await response.json();
-      console.log(
-        "[GistRepository] Update successful, new updated_at:",
-        data.updated_at,
-      );
-      return data.updated_at;
-    } catch (e: any) {
-      console.error("Gist Update Failed:", e.message);
-      throw e;
-    }
+    const data = await response.json();
+    return data.updated_at;
   }
 
   async updateGistFile(
@@ -182,116 +281,56 @@ export class GistRepository implements IGistRepository {
     return this.updateBatch(gistId, { [filename]: content });
   }
 
-  /**
-   * 重命名 Gist 文件
-   * GitHub Gist 不支持直接重命名，需要在一次 PATCH 中同时删除旧文件和创建新文件
-   */
-  async renameFile(
-    gistId: string,
-    oldFilename: string,
-    newFilename: string,
-    content: string,
-  ): Promise<string> {
-    // 一次 PATCH 请求同时删除旧文件 + 创建新文件
-    return this.updateBatch(gistId, {
-      [oldFilename]: null, // 删除旧文件
-      [newFilename]: content, // 创建新文件
-    });
-  }
-
   async getGistContent(gistId: string): Promise<Record<string, GistFile>> {
     this.ensureAuth();
 
-    // 使用 GraphQL 获取 Gist 内容，不包含历史记录
-    // 注意：GraphQL ID 和 REST ID 不同，但可以通过 viewer.gist(name: "REST_ID") 或 resource(url: "...") 获取
-    // 这里我们尝试通过 viewer.gist 查询，如果不仅是自己的 Gist，可能需要 adjustments。
-    // 更稳妥的方式是使用 REST API v3 的 id (即 name)
+    const { data, headers } = await this.requestWithRetry(async () =>
+      this.octokit!.rest.gists.get({ gist_id: gistId }),
+    );
+    this.updateRateLimit(headers);
 
-    // Fallback to REST if complex, but here we want to avoid history.
-    // The query below fetches the gist by name (which corresponds to the ID in REST)
+    const result: Record<string, GistFile> = {};
 
-    const query = `
-      query($name: String!) {
-        rateLimit {
-          limit
-          remaining
-          resetAt
-        }
-        viewer {
-          gist(name: $name) {
-            updatedAt
-            files(limit: 300) {
-              name
-              text
-            }
-          }
-        }
+    if (data.files) {
+      for (const [filename, fileObj] of Object.entries(data.files)) {
+        const file = fileObj as GithubGistFile;
+        result[filename] = await this.normalizeFile(filename, file, data.updated_at);
       }
-    `;
-
-    try {
-      // Octokit v5+ supports .graphql
-      const response: any = await this.requestWithRetry(() => this.octokit!.graphql(query, {
-        name: gistId,
-      }));
-
-      if (response.rateLimit) {
-        this.rateLimit.limit = response.rateLimit.limit;
-        this.rateLimit.remaining = response.rateLimit.remaining;
-        this.rateLimit.resetAt = new Date(response.rateLimit.resetAt).getTime();
-      }
-
-      const gist = response.viewer.gist;
-      if (!gist) {
-        throw new Error("Gist not found via GraphQL");
-      }
-
-      const result: Record<string, GistFile> = {};
-
-      if (gist.files) {
-        for (const file of gist.files) {
-          if (file) {
-            result[file.name] = {
-              id: file.name,
-              filename: file.name,
-              content: file.text || "",
-              // GraphQL doesn't strictly return language in simple File object mostly,
-              // but we can live without it or add fields if schema supports.
-              // File type in GraphQL: name, text, language { name }, encodedName, etc.
-              // Let's keep it simple.
-              updated_at: gist.updatedAt,
-            };
-          }
-        }
-      }
-      return result;
-    } catch (e) {
-      console.warn(
-        "GraphQL fetch failed, falling back to REST (with history overhead)",
-        e,
-      );
-      // Fallback to original REST implementation if GraphQL fails (e.g. scopes issues)
-      const { data } = await this.octokit!.rest.gists.get({ gist_id: gistId });
-      const result: Record<string, GistFile> = {};
-      if (data.files) {
-        for (const [filename, fileObj] of Object.entries(data.files)) {
-          const file = fileObj as GithubGistFile;
-          if (file && !file.truncated) {
-            result[filename] = {
-              id: filename,
-              filename: filename,
-              content: file.content || "",
-              language: file.language || undefined,
-              updated_at: data.updated_at,
-            };
-          }
-        }
-      }
-      return result;
     }
+
+    return result;
   }
 
-  // 获取版本历史 (使用 REST API 分页获取 commit 列表，而非 get Gist 详情)
+  async getGistFilesByNames(
+    gistId: string,
+    filenames: string[],
+  ): Promise<Record<string, GistFile>> {
+    if (filenames.length === 0) {
+      return {};
+    }
+
+    this.ensureAuth();
+
+    const wanted = new Set(filenames);
+    const { data, headers } = await this.requestWithRetry(async () =>
+      this.octokit!.rest.gists.get({ gist_id: gistId }),
+    );
+    this.updateRateLimit(headers);
+
+    const result: Record<string, GistFile> = {};
+    if (!data.files) {
+      return result;
+    }
+
+    for (const [filename, fileObj] of Object.entries(data.files)) {
+      if (!wanted.has(filename)) continue;
+      const file = fileObj as GithubGistFile;
+      result[filename] = await this.normalizeFile(filename, file, data.updated_at);
+    }
+
+    return result;
+  }
+
   async getGistHistory(gistId: string): Promise<GistHistoryEntry[]> {
     this.ensureAuth();
     return this.requestWithRetry(async () => {
@@ -313,7 +352,6 @@ export class GistRepository implements IGistRepository {
     });
   }
 
-  // 获取特定版本的内容
   async getGistVersion(
     gistId: string,
     sha: string,
@@ -322,7 +360,7 @@ export class GistRepository implements IGistRepository {
     return this.requestWithRetry(async () => {
       const { data, headers } = await this.octokit!.rest.gists.getRevision({
         gist_id: gistId,
-        sha: sha,
+        sha,
       });
       this.updateRateLimit(headers);
 
@@ -331,19 +369,115 @@ export class GistRepository implements IGistRepository {
       if (data.files) {
         for (const [filename, fileObj] of Object.entries(data.files)) {
           const file = fileObj as GithubGistFile;
-          if (file && !file.truncated) {
-            result[filename] = {
-              id: filename,
-              filename: filename,
-              content: file.content || "",
-              language: file.language || undefined,
-              updated_at: data.updated_at,
-            };
-          }
+          result[filename] = await this.normalizeFile(filename, file, data.updated_at);
         }
       }
 
       return result;
     });
+  }
+
+  async updateGistDescription(gistId: string, description: string): Promise<void> {
+    this.ensureAuth();
+    const { headers } = await this.requestWithRetry(async () =>
+      this.octokit!.rest.gists.update({
+        gist_id: gistId,
+        description,
+      }),
+    );
+    this.updateRateLimit(headers);
+  }
+
+  async deleteGist(gistId: string): Promise<void> {
+    this.ensureAuth();
+    const { headers } = await this.requestWithRetry(async () =>
+      this.octokit!.rest.gists.delete({ gist_id: gistId }),
+    );
+    this.updateRateLimit(headers);
+  }
+
+  async listNexusShards(rootGistId: string): Promise<ShardDescriptor[]> {
+    const files = await this.getGistFilesByNames(rootGistId, [NEXUS_SHARDS_FILENAME]);
+    const shardFile = files[NEXUS_SHARDS_FILENAME];
+    if (!shardFile?.content) {
+      return [];
+    }
+
+    try {
+      const parsed = JSON.parse(shardFile.content) as ShardDescriptor[];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+      console.warn("Failed to parse nexus_shards.json", e);
+      return [];
+    }
+  }
+
+  async listAllShardGistIds(): Promise<string[]> {
+    this.ensureAuth();
+
+    const result: string[] = [];
+    let page = 1;
+
+    while (true) {
+      const { data, headers } = await this.requestWithRetry(async () =>
+        this.octokit!.rest.gists.list({
+          per_page: 100,
+          page,
+        }),
+      );
+      this.updateRateLimit(headers);
+
+      if (!data || data.length === 0) {
+        break;
+      }
+
+      for (const gist of data as any[]) {
+        const hasShardDesc = (gist.description || "").includes("Nexus Shard");
+        const hasShardManifest = !!gist.files?.["shard_manifest.json"];
+        if (hasShardDesc || hasShardManifest) {
+          if (gist.id) {
+            result.push(gist.id);
+          }
+        }
+      }
+
+      if (data.length < 100) {
+        break;
+      }
+      page += 1;
+    }
+
+    return Array.from(new Set(result));
+  }
+
+  async fetchShardManifest(gistId: string): Promise<ShardManifest | null> {
+    const files = await this.getGistFilesByNames(gistId, [SHARD_MANIFEST_FILENAME]);
+    const manifestFile = files[SHARD_MANIFEST_FILENAME];
+    if (!manifestFile?.content) {
+      return null;
+    }
+
+    try {
+      const parsed = JSON.parse(manifestFile.content) as ShardManifest;
+      if (!parsed || !Array.isArray(parsed.files)) {
+        return null;
+      }
+      return parsed;
+    } catch (e) {
+      console.warn(`Failed to parse ${SHARD_MANIFEST_FILENAME}`, e);
+      return null;
+    }
+  }
+
+  async updateShardManifest(
+    gistId: string,
+    manifest: ShardManifest,
+  ): Promise<string> {
+    manifest.updated_at = new Date().toISOString();
+    return this.updateGistFile(
+      gistId,
+      SHARD_MANIFEST_FILENAME,
+      JSON.stringify(manifest, null, 2),
+    );
   }
 }

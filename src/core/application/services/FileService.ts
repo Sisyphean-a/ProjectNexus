@@ -2,7 +2,7 @@ import type { IFileRepository } from "../ports/IFileRepository";
 import { NexusFile } from "../../domain/entities/NexusFile";
 import { IdGenerator } from "../../domain/shared/IdGenerator";
 import type { SyncService } from "./SyncService";
-import type { NexusIndex, NexusConfig } from "../../domain/entities/types";
+import type { NexusConfig, NexusIndex, GistIndexItem } from "../../domain/entities/types";
 
 export interface FileContext {
   index: NexusIndex;
@@ -33,32 +33,48 @@ export class FileService {
       language,
       [],
       new Date().toISOString(),
-      true, // dirty initially until synced
+      true,
     );
 
-    // 1. Save Local
     await this.fileRepo.save(file);
 
-    // 2. Update Index
-    cat.items.push({
+    const item: GistIndexItem = {
       id: file.id,
       title: file.title,
       gist_file: file.filename,
       language: file.language,
       tags: [],
-    });
+    };
 
-    // 3. Push to Gist
+    const rootGistId = this.getRootGistId(ctx.config);
+    const isV2 = this.isV2Context(ctx);
+
+    if (rootGistId && isV2) {
+      await this.syncService.assignStorageForItem(
+        rootGistId,
+        ctx.index,
+        categoryId,
+        item,
+        file.content,
+      );
+    }
+
+    cat.items.push(item);
+
     let newRemoteTime: string | undefined;
-    if (ctx.config.gistId) {
+    if (rootGistId) {
       newRemoteTime = await this.syncService.pushIndex(
-        ctx.config.gistId,
+        rootGistId,
         ctx.index,
         ctx.lastRemoteUpdatedAt,
       );
 
-      // Save File Content (this advances the Gist updated_at)
-      newRemoteTime = await this.syncService.pushFile(ctx.config.gistId, file);
+      newRemoteTime = await this.syncService.pushFile(
+        rootGistId,
+        ctx.index,
+        file.id,
+        file,
+      );
     }
 
     return { file, newRemoteTime };
@@ -69,19 +85,22 @@ export class FileService {
     fileId: string,
     content: string,
   ): Promise<{ newRemoteTime?: string }> {
-    // Local Update Only (Debounced save usually)
-    // But useNexusStore.saveFileContent does Push.
-
     const file = await this.fileRepo.get(fileId);
     if (!file) throw new Error("File not found");
 
     file.updateContent(content);
     await this.fileRepo.save(file);
 
+    const rootGistId = this.getRootGistId(ctx.config);
+
     let newRemoteTime: string | undefined;
-    if (ctx.config.gistId) {
-      // Async push
-      newRemoteTime = await this.syncService.pushFile(ctx.config.gistId, file);
+    if (rootGistId) {
+      newRemoteTime = await this.syncService.pushFile(
+        rootGistId,
+        ctx.index,
+        fileId,
+        file,
+      );
     }
     return { newRemoteTime };
   }
@@ -99,27 +118,24 @@ export class FileService {
 
     const item = cat.items[idx];
 
-    // 1. Delete Local
     await this.fileRepo.delete(fileId);
-
-    // 2. Update Index
     cat.items.splice(idx, 1);
 
+    const rootGistId = this.getRootGistId(ctx.config);
+
     let newRemoteTime: string | undefined;
-    // 3. Sync
-    if (ctx.config.gistId) {
-      // Push Index
-      // Note: If we just push Index, Gist updates. Then deleteRemoteFile updates again.
-      // We can chain them.
-      await this.syncService.pushIndex(
-        ctx.config.gistId,
+    if (rootGistId) {
+      const intermediateTime = await this.syncService.deleteRemoteFile(
+        rootGistId,
         ctx.index,
-        ctx.lastRemoteUpdatedAt,
-      );
-      // Delete Remote File
-      newRemoteTime = await this.syncService.deleteRemoteFile(
-        ctx.config.gistId,
+        item.id,
         item.gist_file,
+        item.storage,
+      );
+      newRemoteTime = await this.syncService.pushIndex(
+        rootGistId,
+        ctx.index,
+        intermediateTime,
       );
     }
 
@@ -132,11 +148,9 @@ export class FileService {
     updates: { title?: string; tags?: string[] },
   ): Promise<{ newRemoteTime?: string }> {
     const file = await this.fileRepo.get(fileId);
-    if (!file) throw new Error("File not found in DB"); // Should not happen if Index has it?
-    // Actually index is source of truth for structure, DB for content.
+    if (!file) throw new Error("File not found in DB");
 
-    // Update Index Entry
-    let item: any;
+    let item: GistIndexItem | undefined;
     for (const cat of ctx.index.categories) {
       item = cat.items.find((i) => i.id === fileId);
       if (item) break;
@@ -152,15 +166,14 @@ export class FileService {
       item.tags = updates.tags;
     }
 
-    // Save Local DB (Entity)
     await this.fileRepo.save(file);
 
+    const rootGistId = this.getRootGistId(ctx.config);
+
     let newRemoteTime: string | undefined;
-    if (ctx.config.gistId) {
-      // Push Index (Metadata lives in Index)
-      // Also DB has metadata copies, but Gist only has Index for metadata (except tags inside file? No, tags in index).
+    if (rootGistId) {
       newRemoteTime = await this.syncService.pushIndex(
-        ctx.config.gistId,
+        rootGistId,
         ctx.index,
         ctx.lastRemoteUpdatedAt,
       );
@@ -180,86 +193,63 @@ export class FileService {
     file.changeLanguage(newLanguage);
     const newFilename = file.filename;
 
-    if (oldFilename === newFilename) {
-      // Language changed but extension same (e.g. yaml vs yml if mapped same)
-      // Just save local and index update
-      await this.fileRepo.save(file);
-      // Update Index Entry
-      for (const cat of ctx.index.categories) {
-        const item = cat.items.find((i) => i.id === fileId);
-        if (item) {
-          item.language = newLanguage;
-          break;
-        }
-      }
-      let newRemoteTime: string | undefined;
-      if (ctx.config.gistId) {
-        newRemoteTime = await this.syncService.pushIndex(
-          ctx.config.gistId,
-          ctx.index,
-          ctx.lastRemoteUpdatedAt,
-        );
-      }
-      return { success: true, newRemoteTime };
-    }
-
-    // Update Index Entry
     for (const cat of ctx.index.categories) {
       const item = cat.items.find((i) => i.id === fileId);
       if (item) {
         item.language = newLanguage;
         item.gist_file = newFilename;
+        if (item.storage) {
+          item.storage.gist_file = newFilename;
+        }
         break;
       }
     }
 
-    // Save Local DB
     await this.fileRepo.save(file);
 
-    let newRemoteTime: string | undefined;
-    // Sync
-    if (ctx.config.gistId) {
-      // Rename triggers delete old + push new
-      // Logic: Delete (T1) -> Push (T2) -> Push Index (T3)
-      // We need to pass the updated time if we want strict checking, but PushIndex uses lastKnown.
-      // Actually, if we delete, Gist time advances. PushFile checks nothing.
-      // PushIndex checks lastKnown. If lastKnown is T0, and we did Delete(T1), Push(T2).
-      // PushIndex(T0 vs T2) -> Conflict!
-      // FIX: We must thread the timestamp or accept that intermediate steps advance time safely because WE are doing them.
-      // However SyncService.pushIndex checks vs passed lastKnown.
-      // So verification is hard here without updating lastKnown in between.
-      // But SyncService.pushIndex allows `force` or we can update `ctx.lastRemoteUpdatedAt` locally? No, ctx is by val/ref?
-      // Better: pushIndex call here should ideally use the Result of previous ops if possible, OR we update logic to not be so strict if we are in a chain.
-      // Since I cannot change pushIndex signature easily to disable check dynamically without force flag.
-      // Let's assume we use valid sequencing or ...
-      // Wait, FileService methods are high level.
-      // If I do `deleteRemoteFile`, I get T1.
-      // If I do `pushFile`, I get T2.
-      // `pushIndex` checks `lastKnown` (T0) vs Current (T2). It will FAIL.
-      // MAJOR ISSUE REVEALED.
+    const rootGistId = this.getRootGistId(ctx.config);
 
-      // Correct fix for `changeLanguage` chain: Use `lastKnownRemoteTime` for the FIRST op.
-      // Subsequent ops, we know we are the owner.
-      // But `pushIndex` internally does the check.
-      // So we should pass the NEW timestamp to pushIndex if we have it?
-      // Yes, we should capture result of delete/push and pass it to pushIndex as `lastKnownRemoteTime`.
-
-      let intermediateTime = await this.syncService.deleteRemoteFile(
-        ctx.config.gistId,
-        oldFilename,
-      );
-      intermediateTime = await this.syncService.pushFile(
-        ctx.config.gistId,
-        file,
-      );
-
-      newRemoteTime = await this.syncService.pushIndex(
-        ctx.config.gistId,
-        ctx.index,
-        intermediateTime, // Use the updated time from previous steps to avoid conflict
-      );
+    if (!rootGistId) {
+      return { success: true };
     }
 
+    if (oldFilename === newFilename) {
+      const newRemoteTime = await this.syncService.pushIndex(
+        rootGistId,
+        ctx.index,
+        ctx.lastRemoteUpdatedAt,
+      );
+      return { success: true, newRemoteTime };
+    }
+
+    let intermediateTime = await this.syncService.deleteRemoteFile(
+      rootGistId,
+      ctx.index,
+      fileId,
+      oldFilename,
+    );
+
+    intermediateTime = await this.syncService.pushFile(
+      rootGistId,
+      ctx.index,
+      fileId,
+      file,
+    );
+
+    const newRemoteTime = await this.syncService.pushIndex(
+      rootGistId,
+      ctx.index,
+      intermediateTime,
+    );
+
     return { success: true, newRemoteTime };
+  }
+
+  private getRootGistId(config: NexusConfig): string | null {
+    return config.rootGistId || config.gistId || null;
+  }
+
+  private isV2Context(ctx: FileContext): boolean {
+    return (ctx.index.version || ctx.config.schemaVersion || 1) >= 2;
   }
 }

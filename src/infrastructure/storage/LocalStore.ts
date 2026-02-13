@@ -10,6 +10,9 @@ declare const chrome: any;
 const defaultConfig: NexusConfig = {
   githubToken: '',
   gistId: null,
+  rootGistId: null,
+  legacyGistId: null,
+  schemaVersion: 1,
   syncInterval: 30,
   theme: 'auto',
 }
@@ -52,6 +55,9 @@ export class LocalStoreRepository implements ILocalStore {
       this.configPromise = (async () => {
         const config = await this.get(CONFIG_KEY)
         const merged = { ...defaultConfig, ...config }
+        if (!merged.rootGistId && merged.gistId) {
+          merged.rootGistId = merged.gistId
+        }
         this.configCache = merged
         return merged
       })().finally(() => {

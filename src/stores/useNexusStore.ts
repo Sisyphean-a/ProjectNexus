@@ -10,6 +10,7 @@ import {
 } from "../infrastructure";
 import { syncService, fileService } from "../services";
 import type { NexusIndex, NexusConfig } from "../core/domain/entities/types";
+import type { RepairShardsOptions } from "../core/application/services/SyncService";
 import { useAuthStore } from "./useAuthStore";
 
 export const useNexusStore = defineStore("nexus", () => {
@@ -24,7 +25,7 @@ export const useNexusStore = defineStore("nexus", () => {
   const remoteUpdatedAt = ref<string | null>(null); // 远程索引的 updated_at
 
   // Current Gist ID being used
-  const currentGistId = computed(() => config.value?.gistId);
+  const currentGistId = computed(() => config.value?.rootGistId || config.value?.gistId);
 
   // Selection State
   const selectedCategoryId = ref<string | null>(null);
@@ -86,6 +87,10 @@ export const useNexusStore = defineStore("nexus", () => {
         force ? null : remoteUpdatedAt.value,
       );
 
+      if (result.configUpdates) {
+        await updateConfig(result.configUpdates);
+      }
+
       if (result.synced) {
         if (result.index) {
           index.value = result.index;
@@ -101,10 +106,6 @@ export const useNexusStore = defineStore("nexus", () => {
         }
 
         lastSyncedAt.value = new Date().toISOString();
-
-        if (result.configUpdates) {
-          await updateConfig(result.configUpdates);
-        }
 
         if (
           !selectedCategoryId.value &&
@@ -251,6 +252,7 @@ export const useNexusStore = defineStore("nexus", () => {
     isLoading.value = true;
     try {
       const initialIndex: NexusIndex = {
+        version: 2,
         updated_at: new Date().toISOString(),
         categories: [
           {
@@ -261,11 +263,12 @@ export const useNexusStore = defineStore("nexus", () => {
             items: [],
           },
         ],
+        shards: [],
       };
 
       // Use SyncService to create Gist
       const gistId = await syncService.initializeNexus(initialIndex);
-      await updateConfig({ gistId });
+      await updateConfig({ gistId, rootGistId: gistId, schemaVersion: 2 });
 
       index.value = initialIndex;
       // No need to saveIndex again locally as initializeNexus (Service) usually handles it via Repo?
@@ -475,13 +478,22 @@ export const useNexusStore = defineStore("nexus", () => {
           }
 
           // 删除远程文件
-          await syncService.deleteRemoteFile(gistId, item.gist_file);
+          await syncService.deleteRemoteFile(
+            gistId,
+            index.value!,
+            item.id,
+            item.gist_file,
+            item.storage,
+          );
         } catch (e) {
           console.warn(`[Nexus] Failed to cleanup file ${item.gist_file}`, e);
         }
       }),
     ).then(() => {
       console.log("[Nexus] Cleanup completed");
+      saveIndex(true).catch((e) => {
+        console.warn("[Nexus] Failed to persist shard stats after cleanup", e);
+      });
     });
 
     // 重置选择
@@ -622,6 +634,41 @@ export const useNexusStore = defineStore("nexus", () => {
     }
   }
 
+  async function repairShards(options: RepairShardsOptions = {}) {
+    if (!index.value || !currentGistId.value) {
+      throw new Error("当前未初始化 root gist 或 index");
+    }
+    if (!authStore.isAuthenticated) {
+      throw new Error("未认证");
+    }
+
+    isLoading.value = true;
+    try {
+      const result = await syncService.repairShards(
+        currentGistId.value,
+        index.value,
+        options,
+      );
+
+      if (result.applied) {
+        if (result.rootUpdatedAt) {
+          remoteUpdatedAt.value = result.rootUpdatedAt;
+        } else {
+          remoteUpdatedAt.value = new Date().toISOString();
+        }
+        lastSyncedAt.value = new Date().toISOString();
+        if (result.deletedLegacyGistId && config.value?.legacyGistId) {
+          await updateConfig({ legacyGistId: null });
+        }
+        await localStoreRepository.saveIndex(index.value);
+      }
+
+      return result;
+    } finally {
+      isLoading.value = false;
+    }
+  }
+
   return {
     config,
     index,
@@ -654,6 +701,7 @@ export const useNexusStore = defineStore("nexus", () => {
       localHistoryRepository.getHistory(fileId),
     restoreFileContent,
     importRemoteHistory,
+    repairShards,
     resetSecureCache,
     updateFileSecureStatus: async (fileId: string, isSecure: boolean) => {
       if (!index.value || !config.value) return;

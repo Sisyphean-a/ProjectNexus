@@ -29,6 +29,7 @@ export interface GistIndexItem {
   language: string;  // 语言类型（决定扩展名和语法高亮）
   tags?: string[];
   isSecure?: boolean;
+  storage?: NexusFileStorage;
 }
 
 export interface GistIndexCategory {
@@ -39,14 +40,53 @@ export interface GistIndexCategory {
   items: GistIndexItem[];
 }
 
+export interface NexusFileStorage {
+  shardId: string;
+  gistId: string;
+  gist_file: string;
+}
+
+export interface ShardDescriptor {
+  id: string;
+  gistId: string;
+  categoryId?: string;
+  categoryName?: string;
+  part: number;
+  kind: "category" | "large";
+  fileCount: number;
+  totalBytes: number;
+  updated_at: string;
+}
+
+export interface ShardManifestItem {
+  fileId: string;
+  filename: string;
+  checksum: string;
+  updated_at: string;
+  size: number;
+  isSecure?: boolean;
+}
+
+export interface ShardManifest {
+  version: 1;
+  shardId: string;
+  updated_at: string;
+  files: ShardManifestItem[];
+}
+
 export interface NexusIndex {
+  version?: number;
   updated_at: string;
   categories: GistIndexCategory[];
+  shards?: ShardDescriptor[];
 }
 
 export interface NexusConfig {
   githubToken: string;
   gistId: string | null; // The ID of the specific Gist used for Nexus
+  rootGistId?: string | null;
+  legacyGistId?: string | null;
+  schemaVersion?: number;
   syncInterval: number; // in minutes
   theme: "dark" | "light" | "auto";
 }

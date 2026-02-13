@@ -22,6 +22,13 @@ const themeStore = useThemeStore();
 const message = useMessage();
 const dialog = useDialog();
 
+function releaseActiveFocus() {
+  const el = document.activeElement;
+  if (el instanceof HTMLElement) {
+    el.blur();
+  }
+}
+
 // 新建分类模态框
 const showAddModal = ref(false);
 const newCategoryName = ref("");
@@ -204,6 +211,80 @@ async function handleSync() {
     isSyncing.value = false;
   }
 }
+
+const isRepairing = ref(false);
+
+function formatRepairSummary(result: {
+  rawShardCount: number;
+  dedupedShardCount: number;
+  duplicateRowsMerged: number;
+  manifestsLoaded: number;
+  repairedShardCount: number;
+  removedEmptyShards: number;
+  sweptUnreferencedShardGists: number;
+  deletedLegacyGistId?: string;
+}) {
+  const lines = [
+    `原始分片数: ${result.rawShardCount}`,
+    `去重后分片数: ${result.dedupedShardCount}`,
+    `合并重复行: ${result.duplicateRowsMerged}`,
+    `读取 manifest 数: ${result.manifestsLoaded}`,
+    `修复后分片数: ${result.repairedShardCount}`,
+    `移除空分片: ${result.removedEmptyShards}`,
+    `清理旧分片 gist: ${result.sweptUnreferencedShardGists}`,
+  ];
+
+  if (result.deletedLegacyGistId) {
+    lines.push(`已删除 legacy gist: ${result.deletedLegacyGistId}`);
+  }
+
+  return lines.join("\n");
+}
+
+function handleRepairShards() {
+  if (!nexusStore.index || !nexusStore.currentGistId) {
+    message.warning("当前没有可修复的分片数据");
+    return;
+  }
+
+  releaseActiveFocus();
+  dialog.warning({
+    title: "修复并清理旧存储",
+    content:
+      "将执行分片去重、统计重算、README/描述重写，并删除未被当前项目引用的旧 shard gist。继续吗？",
+    positiveText: "开始修复",
+    negativeText: "取消",
+    onPositiveClick: async () => {
+      isRepairing.value = true;
+      try {
+        const result = await nexusStore.repairShards({
+          apply: true,
+          rewriteReadme: true,
+          rewriteDescription: true,
+          dropEmptyShards: true,
+          deleteOrphanGists: true,
+          sweepUnreferencedShardGists: true,
+          legacyGistIdToDelete: nexusStore.config?.legacyGistId || null,
+        });
+
+        message.success("分片修复完成");
+        // Wait one tick after warning dialog closes to avoid focus/aria-hidden contention.
+        setTimeout(() => {
+          releaseActiveFocus();
+          dialog.info({
+            title: "修复结果",
+            content: formatRepairSummary(result),
+          });
+        }, 0);
+      } catch (e) {
+        console.error("Repair shards failed", e);
+        message.error("分片修复失败");
+      } finally {
+        isRepairing.value = false;
+      }
+    },
+  });
+}
 </script>
 
 <template>
@@ -291,12 +372,27 @@ async function handleSync() {
         </NButton>
       </div>
 
+      <NButton
+        block
+        size="small"
+        :quaternary="themeStore.isDark"
+        :tertiary="!themeStore.isDark"
+        :loading="isRepairing"
+        :disabled="!nexusStore.index"
+        @click="handleRepairShards"
+      >
+        <template #icon>
+          <div class="i-heroicons-wrench-screwdriver w-4 h-4"></div>
+        </template>
+        修复分片
+      </NButton>
+
       <div
         class="flex items-center justify-between text-xs"
         :class="themeStore.isDark ? 'text-slate-500' : 'text-slate-400'"
       >
         <span>{{
-          nexusStore.isLoading || isSyncing ? "同步中..." : "已同步"
+          nexusStore.isLoading || isSyncing || isRepairing ? "同步中..." : "已同步"
         }}</span>
         <NButton text size="tiny" :loading="isSyncing" @click="handleSync">
           <template #icon>

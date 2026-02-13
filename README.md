@@ -215,3 +215,27 @@ npm run typecheck
 ```bash
 npx esno scripts/manual_verify_gist.ts
 ```
+
+### 分片修复 (Shard Repair)
+
+用于修复 v2 分片结构中的重复/脏统计，并重写每个 shard gist 的可读元信息。
+
+默认是 dry-run（只打印，不写入）：
+
+```bash
+npm run repair:shards
+```
+
+执行实际修复：
+
+```bash
+APPLY=1 npm run repair:shards
+```
+
+常用参数（环境变量）：
+
+- `ROOT_GIST_ID`: 指定 root gist（不传则自动发现）
+- `REWRITE_README`: 是否重写 shard README（默认 `true`）
+- `REWRITE_DESCRIPTION`: 是否重写 shard 描述（默认 `true`）
+- `DROP_EMPTY_SHARDS`: 是否从 index 中移除空 shard（默认 `true`）
+- `DELETE_ORPHAN_GISTS`: 是否删除已移除的空 shard gist（默认 `false`，建议先 dry-run）

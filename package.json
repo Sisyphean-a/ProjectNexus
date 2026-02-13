@@ -15,7 +15,8 @@
     "dev:web": "cross-env TARGET=web vite",
     "build": "vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "repair:shards": "esno scripts/repair_shards.ts"
   },
   "devDependencies": {
     "@antfu/eslint-config": "^2.27.0",
