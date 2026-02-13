@@ -51,6 +51,7 @@ const language = ref("yaml");
 const isDirty = ref(false);
 const isLoadingContent = ref(false);
 const isReadOnly = ref(false);
+const isSaving = ref(false);
 
 // 编辑器增强
 
@@ -308,18 +309,20 @@ watch(language, async (newLang, oldLang) => {
 
 // 保存
 async function handleSave() {
-  if (!nexusStore.selectedFileId) return;
+  if (!nexusStore.selectedFileId || isSaving.value) return;
 
+  isSaving.value = true;
   const savingMessage = message.loading("保存中...", { duration: 0 });
   try {
     await nexusStore.saveFileContent(nexusStore.selectedFileId, code.value);
     isDirty.value = false;
-    savingMessage.destroy();
     message.success("已保存并同步");
   } catch (e) {
-    savingMessage.destroy();
     message.error("保存失败");
     console.error(e);
+  } finally {
+    savingMessage.destroy();
+    isSaving.value = false;
   }
 }
 
@@ -387,14 +390,21 @@ async function handleCopyAll() {
 
 // 快捷键
 function handleKeyDown(e: KeyboardEvent) {
-  if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+  if (e.defaultPrevented) return;
+
+  const key = e.key.toLowerCase();
+  const isFromCodeMirror = (e.target as HTMLElement | null)?.closest(".cm-editor");
+
+  if ((e.ctrlKey || e.metaKey) && key === "s") {
+    // 避免和 CodeMirror 内置 Mod-s 重复触发保存
+    if (isFromCodeMirror) return;
     e.preventDefault();
     if (!isReadOnly.value) {
       handleSave();
     }
   }
   // Ctrl+G 跳转到行
-  if ((e.ctrlKey || e.metaKey) && e.key === "g") {
+  if ((e.ctrlKey || e.metaKey) && key === "g") {
     e.preventDefault();
   }
 }
@@ -541,7 +551,8 @@ function handleRestoreVersion(content: string) {
             <template #trigger>
               <NButton
                 type="primary"
-                :disabled="!isDirty || isReadOnly"
+                :disabled="!isDirty || isReadOnly || isSaving"
+                :loading="isSaving"
                 @click="handleSave"
               >
                 <template #icon>
