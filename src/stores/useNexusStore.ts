@@ -19,6 +19,9 @@ export interface DeleteCategoryResult {
   failedFiles: string[];
 }
 
+const DEFAULT_SYNC_STALE_MS = 5 * 60 * 1000;
+const DEFAULT_SYNC_COOLDOWN_MS = 30 * 1000;
+
 export const useNexusStore = defineStore("nexus", () => {
   const authStore = useAuthStore();
 
@@ -28,7 +31,11 @@ export const useNexusStore = defineStore("nexus", () => {
 
   // 同步状态追踪
   const lastSyncedAt = ref<string | null>(null); // 上次成功同步的时间
+  const lastSyncAttemptAt = ref<string | null>(null); // 上次尝试同步的时间
   const remoteUpdatedAt = ref<string | null>(null); // 远程索引的 updated_at
+  const isSyncScheduled = ref(false);
+  const syncCooldownMs = ref(DEFAULT_SYNC_COOLDOWN_MS);
+  let activeSyncPromise: Promise<void> | null = null;
 
   // Current Gist ID being used
   const currentGistId = computed(() => config.value?.rootGistId || config.value?.gistId);
@@ -58,6 +65,32 @@ export const useNexusStore = defineStore("nexus", () => {
     return currentCategory.value?.items || [];
   });
 
+  function parseIsoTime(value: string | null): number {
+    if (!value) {
+      return 0;
+    }
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  function ensureDefaultSelection() {
+    const categories = index.value?.categories || [];
+    if (categories.length === 0) {
+      selectedCategoryId.value = null;
+      selectedFileId.value = null;
+      return;
+    }
+
+    const selectedExists = selectedCategoryId.value
+      ? categories.some((cat) => cat.id === selectedCategoryId.value)
+      : false;
+
+    if (!selectedExists) {
+      selectedCategoryId.value = categories[0].id;
+      selectedFileId.value = null;
+    }
+  }
+
   async function init() {
     config.value = await localStoreRepository.getConfig();
 
@@ -74,62 +107,102 @@ export const useNexusStore = defineStore("nexus", () => {
       }
       index.value = null;
     }
+
+    ensureDefaultSelection();
   }
 
   async function sync(force = false) {
     if (!authStore.isAuthenticated) {
       throw new Error("未认证");
     }
-    isLoading.value = true;
 
+    if (activeSyncPromise) {
+      await activeSyncPromise;
+      if (!force) {
+        return;
+      }
+    }
+
+    activeSyncPromise = (async () => {
+      isLoading.value = true;
+      lastSyncAttemptAt.value = new Date().toISOString();
+
+      try {
+        if (!config.value) {
+          config.value = await localStoreRepository.getConfig();
+        }
+
+        // 如果强制同步，传入 null 作为上次更新时间以忽略增量检查
+        const result = await syncService.syncDown(
+          config.value!,
+          force ? null : remoteUpdatedAt.value,
+        );
+
+        if (result.configUpdates) {
+          await updateConfig(result.configUpdates);
+        }
+
+        if (result.synced) {
+          if (result.index) {
+            index.value = result.index;
+          }
+
+          // 优先使用 Gist 的 updated_at，如果未提供（本地已最新且无返回），则保持原样或使用 Index 内部时间
+          // 但注意：syncDown 返回的 gistUpdatedAt 是 Gist 的 container updated_at。
+          if (result.gistUpdatedAt) {
+            remoteUpdatedAt.value = result.gistUpdatedAt;
+          } else if (result.index?.updated_at) {
+            // Fallback，但这可能就是问题所在，所以仅当 gistUpdatedAt 确实不存在时使用
+            remoteUpdatedAt.value = result.index.updated_at;
+          }
+
+          lastSyncedAt.value = new Date().toISOString();
+          ensureDefaultSelection();
+          console.log("[Nexus Sync] 同步完成");
+        } else {
+          ensureDefaultSelection();
+          console.log("[Nexus Sync] 本地已是最新");
+        }
+      } catch (e: any) {
+        console.error("[Nexus] 同步失败:", e);
+        throw e;
+      } finally {
+        isLoading.value = false;
+      }
+    })().finally(() => {
+      activeSyncPromise = null;
+    });
+
+    await activeSyncPromise;
+  }
+
+  async function syncIfStale(maxStaleMs = DEFAULT_SYNC_STALE_MS) {
+    if (!authStore.isAuthenticated) {
+      return false;
+    }
+
+    if (activeSyncPromise) {
+      await activeSyncPromise;
+      return false;
+    }
+
+    const now = Date.now();
+    const lastAttemptMs = parseIsoTime(lastSyncAttemptAt.value);
+    if (lastAttemptMs > 0 && now - lastAttemptMs < syncCooldownMs.value) {
+      return false;
+    }
+
+    const lastSuccessMs = parseIsoTime(lastSyncedAt.value);
+    if (lastSuccessMs > 0 && now - lastSuccessMs < maxStaleMs) {
+      return false;
+    }
+
+    isSyncScheduled.value = true;
     try {
-      if (!config.value) {
-        config.value = await localStoreRepository.getConfig();
-      }
-
-      // 如果强制同步，传入 null 作为上次更新时间以忽略增量检查
-      const result = await syncService.syncDown(
-        config.value!,
-        force ? null : remoteUpdatedAt.value,
-      );
-
-      if (result.configUpdates) {
-        await updateConfig(result.configUpdates);
-      }
-
-      if (result.synced) {
-        if (result.index) {
-          index.value = result.index;
-        }
-
-        // 优先使用 Gist 的 updated_at，如果未提供（本地已最新且无返回），则保持原样或使用 Index 内部时间
-        // 但注意：syncDown 返回的 gistUpdatedAt 是 Gist 的 container updated_at。
-        if (result.gistUpdatedAt) {
-          remoteUpdatedAt.value = result.gistUpdatedAt;
-        } else if (result.index?.updated_at) {
-          // Fallback，但这可能就是问题所在，所以仅当 gistUpdatedAt 确实不存在时使用
-          remoteUpdatedAt.value = result.index.updated_at;
-        }
-
-        lastSyncedAt.value = new Date().toISOString();
-
-        if (
-          !selectedCategoryId.value &&
-          index.value?.categories.length &&
-          index.value.categories.length > 0
-        ) {
-          selectedCategoryId.value = index.value.categories[0].id;
-        }
-
-        console.log("[Nexus Sync] 同步完成");
-      } else {
-        console.log("[Nexus Sync] 本地已是最新");
-      }
-    } catch (e: any) {
-      console.error("[Nexus] 同步失败:", e);
-      throw e;
+      await sync();
+      return true;
     } finally {
-      isLoading.value = false;
+      isSyncScheduled.value = false;
     }
   }
 
@@ -672,10 +745,14 @@ export const useNexusStore = defineStore("nexus", () => {
     currentCategory,
     currentFileList,
     lastSyncedAt,
+    lastSyncAttemptAt,
     remoteUpdatedAt,
     apiRateLimit,
+    isSyncScheduled,
+    syncCooldownMs,
     init,
     sync,
+    syncIfStale,
     initializeGist,
     updateConfig,
     saveIndex,

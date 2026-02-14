@@ -75,6 +75,7 @@ describe("useNexusStore behaviors", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     vi.clearAllMocks();
+    vi.useRealTimers();
     mocks.authState.isAuthenticated = true;
 
     mocks.localStoreRepository.getConfig.mockResolvedValue(createConfig());
@@ -103,6 +104,53 @@ describe("useNexusStore behaviors", () => {
     await store.sync(true);
 
     expect(mocks.syncService.syncDown).toHaveBeenCalledWith(store.config, null);
+  });
+
+  it("init 会加载本地 index 并默认选中首分类", async () => {
+    const store = useNexusStore();
+    mocks.localStoreRepository.getIndex.mockResolvedValue(
+      createIndex({
+        categories: [
+          createCategory({ id: "cat-a", items: [] }),
+          createCategory({ id: "cat-b", items: [] }),
+        ],
+      }),
+    );
+
+    await store.init();
+
+    expect(store.index?.categories.map((c) => c.id)).toEqual(["cat-a", "cat-b"]);
+    expect(store.selectedCategoryId).toBe("cat-a");
+  });
+
+  it("syncIfStale 在阈值内跳过远程同步", async () => {
+    const store = useNexusStore();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-14T00:02:00.000Z"));
+    store.lastSyncedAt = "2026-02-14T00:00:00.000Z";
+
+    const triggered = await store.syncIfStale(5 * 60 * 1000);
+
+    expect(triggered).toBe(false);
+    expect(mocks.syncService.syncDown).not.toHaveBeenCalled();
+  });
+
+  it("syncIfStale 在超过阈值后触发同步", async () => {
+    const store = useNexusStore();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-14T00:10:00.000Z"));
+    store.lastSyncedAt = "2026-02-14T00:00:00.000Z";
+
+    mocks.syncService.syncDown.mockResolvedValue({
+      synced: false,
+      index: null,
+    });
+
+    const triggered = await store.syncIfStale(5 * 60 * 1000);
+
+    expect(triggered).toBe(true);
+    expect(mocks.syncService.syncDown).toHaveBeenCalledTimes(1);
+    expect(store.lastSyncAttemptAt).toBeTruthy();
   });
 
   it("sync 成功后会更新 index、远端时间并选择首分类", async () => {

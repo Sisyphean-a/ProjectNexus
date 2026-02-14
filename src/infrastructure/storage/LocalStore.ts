@@ -13,6 +13,7 @@ const defaultConfig: NexusConfig = {
   rootGistId: null,
   legacyGistId: null,
   schemaVersion: 1,
+  tokenVerifiedAt: null,
   syncInterval: 30,
   theme: 'auto',
 }

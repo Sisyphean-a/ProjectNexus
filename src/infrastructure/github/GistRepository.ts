@@ -34,6 +34,17 @@ export class GistRepository implements IGistRepository {
     resetAt: 0,
   };
 
+  setAuthToken(token: string | null): void {
+    if (!token) {
+      this.octokit = null;
+      this._token = null;
+      return;
+    }
+
+    this.octokit = new Octokit({ auth: token });
+    this._token = token;
+  }
+
   async verifyToken(token: string): Promise<boolean> {
     try {
       const octokit = new Octokit({ auth: token });

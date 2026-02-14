@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { darkTheme, lightTheme, type GlobalThemeOverrides, NConfigProvider, NMessageProvider, NDialogProvider } from 'naive-ui'
 import { useAuthStore } from './stores/useAuthStore'
 import { useNexusStore } from './stores/useNexusStore'
@@ -7,17 +7,126 @@ import { useThemeStore } from './stores/useThemeStore'
 import Welcome from './views/Welcome.vue'
 import CommandCenter from './views/CommandCenter.vue'
 
+const STARTUP_SYNC_DELAY_MS = 3000
+const STARTUP_SYNC_STALE_MS = 5 * 60 * 1000
+
 const authStore = useAuthStore()
 const nexusStore = useNexusStore()
 const themeStore = useThemeStore()
+const startupSyncState = ref<'idle' | 'scheduled' | 'running' | 'failed'>('idle')
+const hasBootstrappedNexus = ref(false)
+let startupSyncTimer: ReturnType<typeof setTimeout> | null = null
+
+function clearStartupSyncTimer() {
+  if (startupSyncTimer) {
+    clearTimeout(startupSyncTimer)
+    startupSyncTimer = null
+  }
+}
+
+function scheduleStartupSync() {
+  if (!authStore.isAuthenticated) {
+    return
+  }
+
+  clearStartupSyncTimer()
+  startupSyncState.value = 'scheduled'
+
+  startupSyncTimer = setTimeout(async () => {
+    startupSyncState.value = 'running'
+    try {
+      await nexusStore.syncIfStale(STARTUP_SYNC_STALE_MS)
+      startupSyncState.value = 'idle'
+    } catch (e) {
+      console.error('[App] Startup sync failed', e)
+      startupSyncState.value = 'failed'
+    }
+  }, STARTUP_SYNC_DELAY_MS)
+}
+
+async function bootstrapNexusForSession() {
+  if (!authStore.isAuthenticated || hasBootstrappedNexus.value) {
+    return
+  }
+
+  hasBootstrappedNexus.value = true
+  try {
+    await nexusStore.init()
+    scheduleStartupSync()
+    void authStore.verifyTokenInBackground().catch((e) => {
+      console.error('[App] Background token verification failed', e)
+    })
+  } catch (e) {
+    hasBootstrappedNexus.value = false
+    throw e
+  }
+}
+
+const showStartupStatus = computed(() => {
+  if (!authStore.isAuthenticated) {
+    return false
+  }
+  return startupSyncState.value !== 'idle' || authStore.tokenStatus === 'unknown'
+})
+
+const startupStatusText = computed(() => {
+  if (startupSyncState.value === 'failed') {
+    return '后台同步失败，可稍后手动重试'
+  }
+  if (startupSyncState.value === 'running') {
+    return '正在后台同步远程数据...'
+  }
+  if (startupSyncState.value === 'scheduled') {
+    return '已加载本地缓存，稍后自动同步...'
+  }
+  if (authStore.tokenStatus === 'unknown') {
+    return '正在后台校验身份凭据...'
+  }
+  return ''
+})
+
+const startupStatusClass = computed(() => {
+  if (startupSyncState.value === 'failed') {
+    return themeStore.isDark
+      ? 'border-amber-500/40 bg-amber-500/15 text-amber-200'
+      : 'border-amber-300/60 bg-amber-50/95 text-amber-700'
+  }
+
+  return themeStore.isDark
+    ? 'border-slate-700/80 bg-slate-900/85 text-slate-300'
+    : 'border-slate-200/80 bg-white/95 text-slate-600'
+})
 
 onMounted(async () => {
   await Promise.all([themeStore.init(), authStore.init()])
-  if (authStore.isAuthenticated) {
-    await nexusStore.init()
-    // 初始化后自动从远程同步最新数据
-    await nexusStore.sync()
+
+  try {
+    await bootstrapNexusForSession()
+  } catch (e) {
+    console.error('[App] Bootstrap failed', e)
   }
+})
+
+watch(
+  () => authStore.isAuthenticated,
+  async (authed) => {
+    if (authed) {
+      try {
+        await bootstrapNexusForSession()
+      } catch (e) {
+        console.error('[App] Session bootstrap failed', e)
+      }
+      return
+    }
+
+    clearStartupSyncTimer()
+    startupSyncState.value = 'idle'
+    hasBootstrappedNexus.value = false
+  },
+)
+
+onBeforeUnmount(() => {
+  clearStartupSyncTimer()
 })
 
 // 深色主题配置
@@ -126,13 +235,32 @@ const currentThemeOverrides = computed(() => themeStore.isDark ? darkThemeOverri
           class="h-screen w-screen overflow-hidden flex flex-col transition-colors duration-300"
           :class="themeStore.isDark ? 'bg-slate-900 text-slate-100' : 'bg-slate-50 text-slate-900'"
         >
-          <div v-if="authStore.isChecking" class="flex-1 flex items-center justify-center">
-            <div class="animate-pulse text-blue-500">Initializing Nexus...</div>
+          <div v-if="!authStore.authBootstrapDone" class="flex-1 flex items-center justify-center">
+            <div class="animate-pulse text-blue-500">Recovering local session...</div>
           </div>
           
           <template v-else>
-            <Welcome v-if="!authStore.isAuthenticated" />
-            <CommandCenter v-else-if="authStore.isAuthenticated" />
+            <div class="flex-1 min-h-0">
+              <Welcome v-if="!authStore.isAuthenticated" />
+              <CommandCenter v-else-if="authStore.isAuthenticated" />
+            </div>
+
+            <Transition
+              enter-active-class="transition duration-250 ease-out"
+              leave-active-class="transition duration-200 ease-in"
+              enter-from-class="opacity-0 translate-y-3"
+              leave-to-class="opacity-0 translate-y-2"
+            >
+              <div
+                v-if="showStartupStatus"
+                class="fixed bottom-4 right-4 z-50 max-w-xs border rounded-lg shadow-lg px-3 py-2 text-xs leading-5 backdrop-blur pointer-events-none"
+                :class="startupStatusClass"
+                role="status"
+                aria-live="polite"
+              >
+                {{ startupStatusText }}
+              </div>
+            </Transition>
           </template>
         </div>
       </NDialogProvider>

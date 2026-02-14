@@ -87,6 +87,7 @@ export interface NexusConfig {
   rootGistId?: string | null;
   legacyGistId?: string | null;
   schemaVersion?: number;
+  tokenVerifiedAt?: string | null;
   syncInterval: number; // in minutes
   theme: "dark" | "light" | "auto";
 }
