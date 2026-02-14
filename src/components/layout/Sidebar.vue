@@ -12,6 +12,7 @@ import {
   NModal,
   NSpace,
   NSelect,
+  NSwitch,
   useMessage,
   useDialog,
 } from "naive-ui";
@@ -44,6 +45,7 @@ const contextMenuCategoryId = ref<string | null>(null);
 // Security Modal
 const showSecurityModal = ref(false);
 const vaultPasswordInput = ref("");
+const rememberVaultInSession = ref(false);
 
 // 编辑分类模态框
 const showEditModal = ref(false);
@@ -146,8 +148,14 @@ async function handleContextMenuSelect(key: string) {
       negativeText: "取消",
       onPositiveClick: async () => {
         try {
-          await nexusStore.deleteCategory(catId);
-          message.success("已删除");
+          const result = await nexusStore.deleteCategory(catId);
+          if (result.failedFiles.length > 0) {
+            message.warning(
+              `分类已删除，但有 ${result.failedFiles.length} 个文件清理失败`,
+            );
+          } else {
+            message.success("已删除");
+          }
         } catch (e) {
           message.error("删除失败");
         }
@@ -177,8 +185,14 @@ async function handleSaveSecurity() {
     message.warning("密码不能为空");
     return;
   }
-  await cryptoProvider.setPassword(vaultPasswordInput.value);
-  message.success("保险库密码已设置 (本设备)");
+  await cryptoProvider.setPassword(vaultPasswordInput.value, {
+    rememberInSession: rememberVaultInSession.value,
+  });
+  message.success(
+    rememberVaultInSession.value
+      ? "保险库密码已设置（本次会话内可自动恢复）"
+      : "保险库密码已设置（仅保留在内存中）",
+  );
   showSecurityModal.value = false;
   vaultPasswordInput.value = "";
 
@@ -490,8 +504,8 @@ function handleRepairShards() {
     >
       <div class="space-y-4">
         <p class="text-xs text-gray-500">
-          此密码用于加密/解密标记为“安全”的文件。密码仅存储在本地
-          (LocalStorage)。
+          此密码用于加密/解密标记为“安全”的文件。默认仅保留在当前运行内存，
+          不写入本地持久化存储。
         </p>
         <NInput
           v-model:value="vaultPasswordInput"
@@ -500,6 +514,10 @@ function handleRepairShards() {
           show-password-on="click"
           @keydown.enter="handleSaveSecurity"
         />
+        <div class="flex items-center justify-between text-xs">
+          <span>在当前会话内记住密码</span>
+          <NSwitch v-model:value="rememberVaultInSession" size="small" />
+        </div>
       </div>
       <template #action>
         <NSpace>

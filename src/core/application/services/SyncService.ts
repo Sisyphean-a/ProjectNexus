@@ -13,6 +13,7 @@ import type {
 import { NexusFile } from "../../domain/entities/NexusFile";
 import { calculateChecksum } from "../../domain/shared/Hash";
 import type { ICryptoProvider } from "../ports/ICryptoProvider";
+import { ShardManifestService } from "./ShardManifestService";
 
 export const DECRYPTION_PENDING_PREFIX = "__NEXUS_DECRYPT_PENDING__";
 
@@ -68,12 +69,16 @@ export interface RepairShardsResult {
 }
 
 export class SyncService {
+  private shardManifestService: ShardManifestService;
+
   constructor(
     private gistRepo: IGistRepository,
     private localStore: ILocalStore,
     private fileRepo: IFileRepository,
     private cryptoProvider: ICryptoProvider,
-  ) {}
+  ) {
+    this.shardManifestService = new ShardManifestService(this.gistRepo);
+  }
 
   async initializeNexus(initialIndex: NexusIndex): Promise<string> {
     const normalized = this.ensureV2Index(initialIndex);
@@ -275,7 +280,7 @@ export class SyncService {
       contentToPush,
     );
 
-    await this.updateShardManifestForUpsert(index, item, file, contentTime);
+    await this.shardManifestService.upsert(index, item, file, contentTime);
 
     file.markClean();
     await this.fileRepo.save(file);
@@ -302,7 +307,11 @@ export class SyncService {
         filename,
         null,
       );
-      await this.updateShardManifestForDeleteByStorage(index, fileId, storageOverride);
+      await this.shardManifestService.removeByStorage(
+        index,
+        fileId,
+        storageOverride,
+      );
       return deletionTime;
     }
 
@@ -317,7 +326,7 @@ export class SyncService {
       null,
     );
 
-    await this.updateShardManifestForDelete(index, item);
+    await this.shardManifestService.removeByItem(index, item);
     return deletionTime;
   }
 
@@ -847,100 +856,6 @@ export class SyncService {
         schemaVersion: 2,
       },
     };
-  }
-
-  private async updateShardManifestForUpsert(
-    index: NexusIndex,
-    item: GistIndexItem,
-    file: NexusFile,
-    updatedAt: string,
-  ): Promise<void> {
-    if (!item.storage) return;
-
-    const descriptor = (index.shards || []).find((s) => s.id === item.storage!.shardId);
-    if (!descriptor) return;
-
-    const manifest =
-      (await this.gistRepo.fetchShardManifest(item.storage.gistId)) ||
-      ({
-        version: 1,
-        shardId: item.storage.shardId,
-        updated_at: new Date().toISOString(),
-        files: [],
-      } as ShardManifest);
-
-    const newSize = this.byteLength(file.content);
-    const existing = manifest.files.find((f) => f.fileId === item.id);
-
-    if (existing) {
-      descriptor.totalBytes = Math.max(0, descriptor.totalBytes - existing.size + newSize);
-      existing.filename = item.storage.gist_file;
-      existing.checksum = calculateChecksum(file.content);
-      existing.updated_at = updatedAt;
-      existing.size = newSize;
-      existing.isSecure = !!item.isSecure;
-    } else {
-      manifest.files.push({
-        fileId: item.id,
-        filename: item.storage.gist_file,
-        checksum: calculateChecksum(file.content),
-        updated_at: updatedAt,
-        size: newSize,
-        isSecure: !!item.isSecure,
-      });
-      descriptor.fileCount += 1;
-      descriptor.totalBytes += newSize;
-    }
-
-    descriptor.updated_at = updatedAt;
-    await this.gistRepo.updateShardManifest(item.storage.gistId, manifest);
-  }
-
-  private async updateShardManifestForDelete(
-    index: NexusIndex,
-    item: GistIndexItem,
-  ): Promise<void> {
-    if (!item.storage) return;
-
-    const descriptor = (index.shards || []).find((s) => s.id === item.storage!.shardId);
-    if (!descriptor) return;
-
-    const manifest = await this.gistRepo.fetchShardManifest(item.storage.gistId);
-    if (!manifest) return;
-
-    const target = manifest.files.find((f) => f.fileId === item.id);
-    if (!target) {
-      return;
-    }
-
-    manifest.files = manifest.files.filter((f) => f.fileId !== item.id);
-    descriptor.fileCount = Math.max(0, descriptor.fileCount - 1);
-    descriptor.totalBytes = Math.max(0, descriptor.totalBytes - target.size);
-    descriptor.updated_at = new Date().toISOString();
-
-    await this.gistRepo.updateShardManifest(item.storage.gistId, manifest);
-  }
-
-  private async updateShardManifestForDeleteByStorage(
-    index: NexusIndex,
-    fileId: string,
-    storage: NexusFileStorage,
-  ): Promise<void> {
-    const descriptor = (index.shards || []).find((s) => s.id === storage.shardId);
-    if (!descriptor) return;
-
-    const manifest = await this.gistRepo.fetchShardManifest(storage.gistId);
-    if (!manifest) return;
-
-    const target = manifest.files.find((f) => f.fileId === fileId);
-    if (!target) return;
-
-    manifest.files = manifest.files.filter((f) => f.fileId !== fileId);
-    descriptor.fileCount = Math.max(0, descriptor.fileCount - 1);
-    descriptor.totalBytes = Math.max(0, descriptor.totalBytes - target.size);
-    descriptor.updated_at = new Date().toISOString();
-
-    await this.gistRepo.updateShardManifest(storage.gistId, manifest);
   }
 
   private async selectOrCreateShard(

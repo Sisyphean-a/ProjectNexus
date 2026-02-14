@@ -16,7 +16,7 @@ import {
   useDialog,
 } from "naive-ui";
 import Fuse from "fuse.js";
-import type { GistIndexItem } from "../../core/domain/types";
+import type { GistIndexItem } from "../../core/domain/entities/types";
 import { languageOptions } from "../../constants/languages";
 
 const nexusStore = useNexusStore();

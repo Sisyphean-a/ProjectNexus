@@ -1,19 +1,35 @@
-import { ICryptoProvider } from "../../core/application/ports/ICryptoProvider";
+import type {
+  ICryptoProvider,
+  SetPasswordOptions,
+} from "../../core/application/ports/ICryptoProvider";
+
+const SESSION_PASSWORD_KEY = "nexus_vault_password_session";
+const LEGACY_LOCAL_PASSWORD_KEY = "nexus_vault_password";
 
 export class WebCryptoProvider implements ICryptoProvider {
   private key: CryptoKey | null = null;
-  private readonly SALT = new TextEncoder().encode("Nexus_Security_Salt_v1"); // Fixed salt for simplicity in this context, or random per user if we stored it.
-  // For "device authorized" logic, we settle on a fixed salt or stored salt. 
-  // Let's use a fixed salt for now to ensure we can regenerate the key easily from just the password.
+  private readonly SALT = new TextEncoder().encode("Nexus_Security_Salt_v1");
 
-  constructor(private storage: Storage = window.localStorage) {
-    this.tryLoadFromStorage();
+  constructor(
+    private sessionStorage: Storage = window.sessionStorage,
+    private localStorage: Storage = window.localStorage,
+  ) {
+    this.tryLoadFromSession();
+    this.clearLegacyPasswordCache();
   }
 
-  private async tryLoadFromStorage() {
-    const savedPwd = this.storage.getItem("nexus_vault_password");
+  private tryLoadFromSession(): void {
+    const savedPwd = this.sessionStorage.getItem(SESSION_PASSWORD_KEY);
     if (savedPwd) {
-      await this.setPassword(savedPwd);
+      void this.setPassword(savedPwd, { rememberInSession: true });
+    }
+  }
+
+  private clearLegacyPasswordCache(): void {
+    try {
+      this.localStorage.removeItem(LEGACY_LOCAL_PASSWORD_KEY);
+    } catch {
+      // ignore storage failures (e.g. privacy mode)
     }
   }
 
@@ -21,9 +37,21 @@ export class WebCryptoProvider implements ICryptoProvider {
     return !!this.key;
   }
 
-  async setPassword(password: string): Promise<void> {
-    this.storage.setItem("nexus_vault_password", password);
+  async setPassword(
+    password: string,
+    options: SetPasswordOptions = {},
+  ): Promise<void> {
+    if (options.rememberInSession) {
+      this.sessionStorage.setItem(SESSION_PASSWORD_KEY, password);
+    } else {
+      this.sessionStorage.removeItem(SESSION_PASSWORD_KEY);
+    }
     this.key = await this.deriveKey(password);
+  }
+
+  clearPassword(): void {
+    this.key = null;
+    this.sessionStorage.removeItem(SESSION_PASSWORD_KEY);
   }
 
   async encrypt(text: string): Promise<string> {
@@ -55,9 +83,6 @@ export class WebCryptoProvider implements ICryptoProvider {
 
     const parts = encryptedText.split(":");
     if (parts.length !== 2) {
-        // Fallback: maybe it's not encrypted or old format? 
-        // For now, assume strict format. If fails, return original text or throw?
-        // Let's throw to be safe, or return raw if it doesn't look like our format.
       throw new Error("Invalid encrypted format");
     }
 
@@ -74,7 +99,7 @@ export class WebCryptoProvider implements ICryptoProvider {
         ciphertext
       );
       return new TextDecoder().decode(decryptedContent);
-    } catch (e) {
+    } catch {
       throw new Error("Decryption failed. Wrong password?");
     }
   }

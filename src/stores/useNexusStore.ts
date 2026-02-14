@@ -11,7 +11,13 @@ import {
 import { syncService, fileService } from "../services";
 import type { NexusIndex, NexusConfig } from "../core/domain/entities/types";
 import type { RepairShardsOptions } from "../core/application/services/SyncService";
+import { IdGenerator } from "../core/domain/shared/IdGenerator";
 import { useAuthStore } from "./useAuthStore";
+
+export interface DeleteCategoryResult {
+  deletedFiles: number;
+  failedFiles: string[];
+}
 
 export const useNexusStore = defineStore("nexus", () => {
   const authStore = useAuthStore();
@@ -368,64 +374,32 @@ export const useNexusStore = defineStore("nexus", () => {
     icon = "folder",
     defaultLanguage = "yaml",
   ) {
-    console.log("[addCategory] 开始创建分类:", name);
-
     if (!index.value) {
-      console.error("[addCategory] index.value 为空");
       return;
     }
 
-    console.log("[addCategory] currentGistId:", currentGistId.value);
-    console.log(
-      "[addCategory] index.value.categories.length:",
-      index.value.categories.length,
-    );
-
-    // Use IdGenerator or simple random string if acceptable?
-    // Let's us IdGenerator from shared kernel.
-    // Wait, I need to import it. I'll add import in another step or just use simple logic here if I don't want to mess up imports block again?
-    // To follow the plan strictly, I should have imported it.
-    // But I can inline generation for now to save tool calls, as it was a private helper before.
-    // Or I can add import at top.
-    // I'll inline a simple generator to be safe and clean.
-    const genId = () =>
-      Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
-
     const newCategory = {
-      id: genId(),
+      id: IdGenerator.generate(),
       name,
       icon,
       defaultLanguage,
       items: [],
     };
 
-    console.log("[addCategory] 新分类对象:", newCategory);
-
-    // 先添加到本地索引
     index.value.categories.push(newCategory);
-    console.log(
-      "[addCategory] 已添加到本地索引,当前分类数:",
-      index.value.categories.length,
-    );
 
     try {
-      // 尝试保存到远程
-      console.log("[addCategory] 准备调用 saveIndex...");
       await saveIndex();
-      console.log("[addCategory] saveIndex 成功");
       selectedCategoryId.value = newCategory.id;
       return newCategory;
     } catch (e) {
-      console.error("[addCategory] saveIndex 失败:", e);
-      // 如果远程保存失败,回滚本地更改
       const idx = index.value.categories.findIndex(
         (c) => c.id === newCategory.id,
       );
       if (idx !== -1) {
         index.value.categories.splice(idx, 1);
-        console.log("[addCategory] 已回滚本地更改");
       }
-      throw e; // 重新抛出异常,让调用者知道失败了
+      throw e;
     }
   }
 
@@ -444,63 +418,82 @@ export const useNexusStore = defineStore("nexus", () => {
     }
   }
 
-  async function deleteCategory(id: string) {
-    if (!index.value || !currentGistId.value) return;
+  async function deleteCategory(id: string): Promise<DeleteCategoryResult> {
+    if (!index.value || !currentGistId.value) {
+      return { deletedFiles: 0, failedFiles: [] };
+    }
     const catIndex = index.value.categories.findIndex((c) => c.id === id);
-    if (catIndex === -1) return;
+    if (catIndex === -1) {
+      return { deletedFiles: 0, failedFiles: [] };
+    }
 
-    // 先保存分类引用
     const category = index.value.categories[catIndex];
 
-    // 1. 先更新本地索引并保存
     index.value.categories.splice(catIndex, 1);
 
-    // 如果没有任何分类了，允许强制保存以清空远程
     const isNowEmpty = index.value.categories.length === 0;
     await saveIndex(isNowEmpty);
 
-    // 2. 异步清理孤儿文件
-    const gistId = currentGistId.value;
-    Promise.all(
-      category.items.map(async (item) => {
-        try {
-          // 删除本地 DB
-          await fileRepository.delete(item.id);
-
-          // 删除历史记录
-          try {
-            await localHistoryRepository.deleteFileHistory(item.id);
-          } catch (historyErr) {
-            console.warn(
-              `[Nexus] Failed to cleanup history for ${item.id}`,
-              historyErr,
-            );
-          }
-
-          // 删除远程文件
-          await syncService.deleteRemoteFile(
-            gistId,
-            index.value!,
-            item.id,
-            item.gist_file,
-            item.storage,
-          );
-        } catch (e) {
-          console.warn(`[Nexus] Failed to cleanup file ${item.gist_file}`, e);
-        }
-      }),
-    ).then(() => {
-      console.log("[Nexus] Cleanup completed");
-      saveIndex(true).catch((e) => {
-        console.warn("[Nexus] Failed to persist shard stats after cleanup", e);
-      });
-    });
-
-    // 重置选择
     if (selectedCategoryId.value === id) {
       selectedCategoryId.value = index.value.categories[0]?.id || null;
       selectedFileId.value = null;
     }
+
+    const gistId = currentGistId.value;
+    const cleanupResults = await Promise.allSettled(
+      category.items.map(async (item) => {
+        // 删除本地 DB
+        await fileRepository.delete(item.id);
+
+        // 删除历史记录失败不影响主流程
+        try {
+          await localHistoryRepository.deleteFileHistory(item.id);
+        } catch (historyErr) {
+          console.warn(
+            `[Nexus] Failed to cleanup history for ${item.id}`,
+            historyErr,
+          );
+        }
+
+        // 删除远程文件
+        await syncService.deleteRemoteFile(
+          gistId,
+          index.value!,
+          item.id,
+          item.gist_file,
+          item.storage,
+        );
+      }),
+    );
+
+    const failedFiles: string[] = [];
+    let deletedFiles = 0;
+    cleanupResults.forEach((result, idx) => {
+      if (result.status === "fulfilled") {
+        deletedFiles += 1;
+        return;
+      }
+      failedFiles.push(category.items[idx].gist_file);
+      console.warn(
+        `[Nexus] Failed to cleanup file ${category.items[idx].gist_file}`,
+        result.reason,
+      );
+    });
+
+    try {
+      await saveIndex(true);
+    } catch (e) {
+      console.warn("[Nexus] Failed to persist shard stats after cleanup", e);
+      throw e;
+    }
+
+    if (failedFiles.length > 0) {
+      console.warn(
+        `[Nexus] Category deleted with partial cleanup failures (${failedFiles.length}/${category.items.length})`,
+      );
+    }
+
+    return { deletedFiles, failedFiles };
   }
 
   // ========== 文件 CRUD ==========

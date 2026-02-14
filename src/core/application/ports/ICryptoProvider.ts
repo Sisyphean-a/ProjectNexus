@@ -1,3 +1,7 @@
+export interface SetPasswordOptions {
+  rememberInSession?: boolean;
+}
+
 export interface ICryptoProvider {
   /**
    * Encrypts the given plain text.
@@ -17,10 +21,15 @@ export interface ICryptoProvider {
    * Sets the password used for key derivation.
    * @param password User provided password
    */
-  setPassword(password: string): Promise<void>;
+  setPassword(password: string, options?: SetPasswordOptions): Promise<void>;
 
   /**
    * Checks if a password has been set/configured.
    */
   hasPassword(): boolean;
+
+  /**
+   * Clears the current key from memory and any session persistence.
+   */
+  clearPassword(): void;
 }
