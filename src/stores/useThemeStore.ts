@@ -51,6 +51,18 @@ export const useThemeStore = defineStore('theme', () => {
     await setMode(modes[nextIndex])
   }
 
+  // 监听 isDark 变化，自动切换 html class
+  // 这样可以使用 UnoCSS 的 dark: 变体
+  watch(isDark, (dark) => {
+    if (typeof document !== 'undefined') {
+      if (dark) {
+        document.documentElement.classList.add('dark')
+      } else {
+        document.documentElement.classList.remove('dark')
+      }
+    }
+  }, { immediate: true })
+
   return {
     mode,
     effectiveTheme,

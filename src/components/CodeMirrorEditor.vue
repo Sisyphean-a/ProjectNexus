@@ -57,6 +57,11 @@ const editorStyle = computed(() => ({
   height: "100%",
   fontSize: `${props.fontSize || 14}px`,
 }));
+
+function handleChange(val: string) {
+  emit('update:modelValue', val);
+  emit('change', val);
+}
 </script>
 
 <template>
@@ -67,7 +72,7 @@ const editorStyle = computed(() => ({
       :autofocus="true"
       :indent-with-tab="true"
       :tab-size="2"
-      @change="(val) => { emit('update:modelValue', val); emit('change', val); }"
+      @change="handleChange"
     />
   </div>
 </template>

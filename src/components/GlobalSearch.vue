@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { useNexusStore } from "../stores/useNexusStore";
-import { useThemeStore } from "../stores/useThemeStore";
 import { NModal, NInput, NScrollbar } from "naive-ui";
 import Fuse from "fuse.js";
 
@@ -15,7 +14,6 @@ interface SearchItem {
 }
 
 const nexusStore = useNexusStore();
-const themeStore = useThemeStore();
 
 const show = ref(false);
 const searchQuery = ref("");
@@ -67,7 +65,7 @@ const filteredItems = computed(() => {
   return fuse.value
     .search(searchQuery.value)
     .slice(0, 10)
-    .map((r) => r.item);
+    .map((r: any) => r.item);
 });
 
 // 重置选择索引
@@ -181,9 +179,7 @@ defineExpose({ openSearch });
             :class="[
               selectedIndex === index
                 ? 'bg-blue-500/20 text-blue-500'
-                : themeStore.isDark
-                  ? 'hover:bg-slate-700/50'
-                  : 'hover:bg-slate-100',
+                : 'hover:bg-slate-100 dark:hover:bg-slate-700/50',
             ]"
             @click="selectItem(item)"
             @mouseenter="selectedIndex = index"
@@ -195,31 +191,24 @@ defineExpose({ openSearch });
                   item.type === 'category'
                     ? 'i-heroicons-folder'
                     : 'i-heroicons-document-text',
-                  themeStore.isDark ? 'text-slate-400' : 'text-slate-500',
+                  'text-slate-500 dark:text-slate-400',
                 ]"
               ></div>
               <div class="flex-1 min-w-0">
                 <div
-                  class="font-medium truncate"
-                  :class="
-                    themeStore.isDark ? 'text-slate-200' : 'text-slate-700'
-                  "
+                  class="font-medium truncate text-slate-700 dark:text-slate-200"
                 >
                   {{ item.title }}
                 </div>
                 <div
                   v-if="item.categoryName"
-                  class="text-xs truncate"
-                  :class="
-                    themeStore.isDark ? 'text-slate-500' : 'text-slate-400'
-                  "
+                  class="text-xs truncate text-slate-400 dark:text-slate-500"
                 >
                   {{ item.categoryName }}
                 </div>
               </div>
               <div
-                class="text-xs ml-2"
-                :class="themeStore.isDark ? 'text-slate-500' : 'text-slate-400'"
+                class="text-xs ml-2 text-slate-400 dark:text-slate-500"
               >
                 {{ item.type === "category" ? "分类" : "配置" }}
               </div>
@@ -228,8 +217,7 @@ defineExpose({ openSearch });
 
           <div
             v-if="filteredItems.length === 0"
-            class="py-8 text-center"
-            :class="themeStore.isDark ? 'text-slate-500' : 'text-slate-400'"
+            class="py-8 text-center text-slate-400 dark:text-slate-500"
           >
             未找到匹配项
           </div>
@@ -238,28 +226,20 @@ defineExpose({ openSearch });
 
       <!-- 快捷键提示 -->
       <div
-        class="flex items-center justify-center text-xs pt-2 border-t"
-        :class="
-          themeStore.isDark
-            ? 'text-slate-500 border-slate-700'
-            : 'text-slate-400 border-slate-200'
-        "
+        class="flex items-center justify-center text-xs pt-2 border-t text-slate-400 border-slate-200 dark:text-slate-500 dark:border-slate-700"
       >
         <span
-          class="px-1.5 py-0.5 rounded mr-1"
-          :class="themeStore.isDark ? 'bg-slate-700' : 'bg-slate-200'"
+          class="px-1.5 py-0.5 rounded mr-1 bg-slate-200 dark:bg-slate-700"
           >↑↓</span
         >
         导航
         <span
-          class="px-1.5 py-0.5 rounded mx-2"
-          :class="themeStore.isDark ? 'bg-slate-700' : 'bg-slate-200'"
+          class="px-1.5 py-0.5 rounded mx-2 bg-slate-200 dark:bg-slate-700"
           >Enter</span
         >
         选择
         <span
-          class="px-1.5 py-0.5 rounded ml-1"
-          :class="themeStore.isDark ? 'bg-slate-700' : 'bg-slate-200'"
+          class="px-1.5 py-0.5 rounded ml-1 bg-slate-200 dark:bg-slate-700"
           >Esc</span
         >
         关闭

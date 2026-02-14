@@ -87,14 +87,10 @@ const startupStatusText = computed(() => {
 
 const startupStatusClass = computed(() => {
   if (startupSyncState.value === 'failed') {
-    return themeStore.isDark
-      ? 'border-amber-500/40 bg-amber-500/15 text-amber-200'
-      : 'border-amber-300/60 bg-amber-50/95 text-amber-700'
+    return 'border-amber-300/60 bg-amber-50/95 text-amber-700 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-200'
   }
 
-  return themeStore.isDark
-    ? 'border-slate-700/80 bg-slate-900/85 text-slate-300'
-    : 'border-slate-200/80 bg-white/95 text-slate-600'
+  return 'border-slate-200/80 bg-white/95 text-slate-600 dark:border-slate-700/80 dark:bg-slate-900/85 dark:text-slate-300'
 })
 
 onMounted(async () => {
@@ -232,8 +228,7 @@ const currentThemeOverrides = computed(() => themeStore.isDark ? darkThemeOverri
     <NMessageProvider>
       <NDialogProvider>
         <div 
-          class="h-screen w-screen overflow-hidden flex flex-col transition-colors duration-300"
-          :class="themeStore.isDark ? 'bg-slate-900 text-slate-100' : 'bg-slate-50 text-slate-900'"
+          class="h-screen w-screen overflow-hidden flex flex-col transition-colors duration-300 bg-slate-50 text-slate-900 dark:bg-slate-900 dark:text-slate-100"
         >
           <div v-if="!authStore.authBootstrapDone" class="flex-1 flex items-center justify-center">
             <div class="animate-pulse text-blue-500">Recovering local session...</div>
