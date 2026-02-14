@@ -138,17 +138,21 @@ async function handleContextMenuSelect(key: string) {
       content: `确定要删除配置「${file?.title}」吗？此操作不可撤销。`,
       positiveText: "删除",
       negativeText: "取消",
-      onPositiveClick: async () => {
+      onPositiveClick: () => {
         // 设置删除中状态
         deletingFileId.value = fileId;
-        try {
-          await nexusStore.deleteFile(nexusStore.selectedCategoryId!, fileId);
-          message.success("已删除");
-        } catch (e) {
-          message.error("删除失败");
-        } finally {
-          deletingFileId.value = null;
-        }
+        const deletingMessage = message.loading("删除中...", { duration: 0 });
+        void (async () => {
+          try {
+            await nexusStore.deleteFile(nexusStore.selectedCategoryId!, fileId);
+            message.success("已删除");
+          } catch (e) {
+            message.error("删除失败");
+          } finally {
+            deletingMessage.destroy();
+            deletingFileId.value = null;
+          }
+        })();
       },
     });
   }

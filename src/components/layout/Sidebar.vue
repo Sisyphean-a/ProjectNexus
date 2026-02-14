@@ -146,19 +146,24 @@ async function handleContextMenuSelect(key: string) {
       content: `确定要删除分类「${cat?.name}」及其所有配置吗？此操作不可撤销。`,
       positiveText: "删除",
       negativeText: "取消",
-      onPositiveClick: async () => {
-        try {
-          const result = await nexusStore.deleteCategory(catId);
-          if (result.failedFiles.length > 0) {
-            message.warning(
-              `分类已删除，但有 ${result.failedFiles.length} 个文件清理失败`,
-            );
-          } else {
-            message.success("已删除");
+      onPositiveClick: () => {
+        const deletingMessage = message.loading("删除分类中...", { duration: 0 });
+        void (async () => {
+          try {
+            const result = await nexusStore.deleteCategory(catId);
+            if (result.failedFiles.length > 0) {
+              message.warning(
+                `分类已删除，但有 ${result.failedFiles.length} 个文件清理失败`,
+              );
+            } else {
+              message.success("已删除");
+            }
+          } catch (e) {
+            message.error("删除失败");
+          } finally {
+            deletingMessage.destroy();
           }
-        } catch (e) {
-          message.error("删除失败");
-        }
+        })();
       },
     });
   }
@@ -268,34 +273,38 @@ function handleRepairShards() {
       "将执行分片去重、统计重算、README/描述重写，并删除未被当前项目引用的旧 shard gist。继续吗？",
     positiveText: "开始修复",
     negativeText: "取消",
-    onPositiveClick: async () => {
+    onPositiveClick: () => {
       isRepairing.value = true;
-      try {
-        const result = await nexusStore.repairShards({
-          apply: true,
-          rewriteReadme: true,
-          rewriteDescription: true,
-          dropEmptyShards: true,
-          deleteOrphanGists: true,
-          sweepUnreferencedShardGists: true,
-          legacyGistIdToDelete: nexusStore.config?.legacyGistId || null,
-        });
-
-        message.success("分片修复完成");
-        // Wait one tick after warning dialog closes to avoid focus/aria-hidden contention.
-        setTimeout(() => {
-          releaseActiveFocus();
-          dialog.info({
-            title: "修复结果",
-            content: formatRepairSummary(result),
+      const repairingMessage = message.loading("分片修复中...", { duration: 0 });
+      void (async () => {
+        try {
+          const result = await nexusStore.repairShards({
+            apply: true,
+            rewriteReadme: true,
+            rewriteDescription: true,
+            dropEmptyShards: true,
+            deleteOrphanGists: true,
+            sweepUnreferencedShardGists: true,
+            legacyGistIdToDelete: nexusStore.config?.legacyGistId || null,
           });
-        }, 0);
-      } catch (e) {
-        console.error("Repair shards failed", e);
-        message.error("分片修复失败");
-      } finally {
-        isRepairing.value = false;
-      }
+
+          message.success("分片修复完成");
+          // Wait one tick after warning dialog closes to avoid focus/aria-hidden contention.
+          setTimeout(() => {
+            releaseActiveFocus();
+            dialog.info({
+              title: "修复结果",
+              content: formatRepairSummary(result),
+            });
+          }, 0);
+        } catch (e) {
+          console.error("Repair shards failed", e);
+          message.error("分片修复失败");
+        } finally {
+          repairingMessage.destroy();
+          isRepairing.value = false;
+        }
+      })();
     },
   });
 }
