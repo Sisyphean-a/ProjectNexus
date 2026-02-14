@@ -16,6 +16,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "repair:shards": "esno scripts/repair_shards.ts"
   },
   "devDependencies": {
@@ -28,6 +31,7 @@
     "@typescript-eslint/eslint-plugin": "^8.2.0",
     "@unocss/reset": "^0.62.2",
     "@vitejs/plugin-vue": "^5.1.2",
+    "@vitest/coverage-v8": "^2.1.9",
     "@vue/compiler-sfc": "^3.4.38",
     "@vue/test-utils": "^2.4.6",
     "@vueuse/core": "^11.0.1",

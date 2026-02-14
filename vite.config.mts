@@ -145,5 +145,43 @@ export default defineConfig(({ command }) => ({
   test: {
     globals: true,
     environment: "jsdom",
+    setupFiles: [r("src/test/setup.ts")],
+    include: [
+      "**/*.test.ts",
+      "**/__tests__/**/*.test.ts",
+      "../tests/integration/**/*.test.ts",
+    ],
+    exclude: [
+      "**/node_modules/**",
+      "**/dist/**",
+      "**/.{idea,git,cache,output,temp}/**",
+      "**/.DS_Store",
+    ],
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "json-summary", "html"],
+      reportsDirectory: r("coverage"),
+      include: ["**/*.{ts,vue}", "../tests/integration/**/*.ts"],
+      exclude: [
+        "**/*.d.ts",
+        "**/*.test.ts",
+        "**/__tests__/**",
+        "**/main.ts",
+        "**/background.ts",
+        "**/env.ts",
+        "**/manifest.json",
+        "**/index.html",
+        "**/public/**",
+        "**/assets/**",
+        "../tests/fixtures/**",
+        "../tests/factories/**",
+      ],
+      thresholds: {
+        lines: 25,
+        functions: 55,
+        branches: 55,
+        statements: 25,
+      },
+    },
   },
 }));

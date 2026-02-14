@@ -174,6 +174,39 @@ npm run build
 npm run typecheck
 ```
 
+### 运行测试
+
+```bash
+npm run test
+```
+
+### 监听模式
+
+```bash
+npm run test:watch
+```
+
+### 覆盖率报告
+
+```bash
+npm run test:coverage
+```
+
+## ✅ 测试策略
+
+- **单元测试**：与源码就近放置，统一使用 `__tests__` 与 `*.test.ts`。
+- **集成测试**：集中放在 `tests/integration`。
+- **共享测试资产**：
+  - 数据夹具：`tests/fixtures`
+  - 测试工厂：`tests/factories`
+
+当前覆盖率门禁（Vitest）：
+
+- lines: `25`
+- functions: `55`
+- branches: `55`
+- statements: `25`
+
 ---
 
 ## 🔐 隐私与安全 (Privacy & Security)

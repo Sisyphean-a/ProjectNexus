@@ -163,4 +163,38 @@ describe("useNexusStore.deleteCategory", () => {
     expect(mocks.fileRepository.delete).toHaveBeenCalledTimes(2);
     expect(mocks.localHistoryRepository.deleteFileHistory).toHaveBeenCalledTimes(2);
   });
+
+  it("在全部清理成功时返回完整删除结果", async () => {
+    const store = useNexusStore();
+    store.config = createConfig();
+    store.index = createIndex();
+    store.selectedCategoryId = "cat-a";
+
+    mocks.syncService.deleteRemoteFile.mockResolvedValue(
+      "2026-01-02T00:00:00.000Z",
+    );
+
+    const result = await store.deleteCategory("cat-a");
+
+    expect(result.deletedFiles).toBe(2);
+    expect(result.failedFiles).toEqual([]);
+    expect(store.index?.categories.map((c) => c.id)).toEqual(["cat-b"]);
+    expect(store.selectedCategoryId).toBe("cat-b");
+  });
+
+  it("在全部清理失败时仍保留删除动作并返回失败列表", async () => {
+    const store = useNexusStore();
+    store.config = createConfig();
+    store.index = createIndex();
+    store.selectedCategoryId = "cat-a";
+
+    mocks.syncService.deleteRemoteFile.mockRejectedValue(new Error("remote failure"));
+
+    const result = await store.deleteCategory("cat-a");
+
+    expect(result.deletedFiles).toBe(0);
+    expect(result.failedFiles).toEqual(["file-1.yaml", "file-2.yaml"]);
+    expect(store.index?.categories.map((c) => c.id)).toEqual(["cat-b"]);
+    expect(mocks.syncService.pushIndex).toHaveBeenCalledTimes(2);
+  });
 });

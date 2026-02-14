@@ -48,4 +48,25 @@ describe("WebCryptoProvider", () => {
     const provider = new WebCryptoProvider();
     expect(provider.hasPassword()).toBe(false);
   });
+
+  it("encrypt 返回 IV 与密文的拼接格式", async () => {
+    const provider = new WebCryptoProvider();
+    await provider.setPassword("vault-pass");
+
+    const encrypted = await provider.encrypt("secret");
+    const parts = encrypted.split(":");
+
+    expect(parts).toHaveLength(2);
+    expect(parts[0]).toBeTruthy();
+    expect(parts[1]).toBeTruthy();
+  });
+
+  it("decrypt 在格式非法时抛错", async () => {
+    const provider = new WebCryptoProvider();
+    await provider.setPassword("vault-pass");
+
+    await expect(provider.decrypt("invalid-format")).rejects.toThrow(
+      "Invalid encrypted format",
+    );
+  });
 });
