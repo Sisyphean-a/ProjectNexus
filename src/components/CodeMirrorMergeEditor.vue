@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, watch } from "vue";
 import { MergeView } from "@codemirror/merge";
-import { Compartment } from "@codemirror/state";
+import { Compartment, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { oneDark } from "@codemirror/theme-one-dark";
-import { getCodeMirrorLanguageExtension } from "./codemirror/languageExtensions";
+import { loadCodeMirrorLanguageExtension } from "./codemirror/languageExtensions";
 
 const props = defineProps<{
   original: string;
@@ -15,12 +15,33 @@ const props = defineProps<{
 
 const containerRef = ref<HTMLElement | null>(null);
 let mergeView: MergeView | null = null;
+let mountRequestId = 0;
+let languageRequestId = 0;
 
 const languageCompartment = new Compartment();
 const themeCompartment = new Compartment();
 
-onMounted(() => {
+function destroyMergeView() {
+  mountRequestId += 1;
+  languageRequestId += 1;
+  mergeView?.destroy();
+  mergeView = null;
+}
+
+async function mountMergeView() {
   if (!containerRef.value) return;
+
+  const requestId = ++mountRequestId;
+  let languageExtension: Extension = [];
+  try {
+    languageExtension = await loadCodeMirrorLanguageExtension(props.language);
+  } catch (error) {
+    console.error("[CodeMirrorMergeEditor] Failed to load language extension", error);
+  }
+
+  if (requestId !== mountRequestId || !containerRef.value) {
+    return;
+  }
 
   mergeView = new MergeView({
     a: {
@@ -28,7 +49,7 @@ onMounted(() => {
       extensions: [
         EditorView.editable.of(false),
         EditorView.lineWrapping,
-        languageCompartment.of(getCodeMirrorLanguageExtension(props.language)),
+        languageCompartment.of(languageExtension),
         themeCompartment.of(props.theme === "dark" ? oneDark : []),
       ],
     },
@@ -37,75 +58,62 @@ onMounted(() => {
       extensions: [
         EditorView.editable.of(false),
         EditorView.lineWrapping,
-        languageCompartment.of(getCodeMirrorLanguageExtension(props.language)),
+        languageCompartment.of(languageExtension),
         themeCompartment.of(props.theme === "dark" ? oneDark : []),
       ],
     },
     parent: containerRef.value,
-    collapseUnchanged: { margin: 3, minSize: 4 } // Optional: verify if user wants this. Default nice.
+    collapseUnchanged: { margin: 3, minSize: 4 },
   });
+}
+
+onMounted(() => {
+  void mountMergeView();
 });
 
 onBeforeUnmount(() => {
-  mergeView?.destroy();
+  destroyMergeView();
 });
 
 watch(
   () => [props.original, props.modified],
   () => {
-    if (mergeView) {
-      // Re-create or update transaction? 
-      // MergeView architecture is complex for updates. 
-      // Easiest is to destroy and recreate if content checks fail, but better to dispatch changes.
-      // Alternatively, just destroy and recreate for simplicity as this is a history viewer.
-      mergeView.destroy();
-      // Re-mount (reuse onMounted logic)
-       if (!containerRef.value) return;
-
-        mergeView = new MergeView({
-            a: {
-            doc: props.original,
-            extensions: [
-                EditorView.editable.of(false),
-                EditorView.lineWrapping,
-                languageCompartment.of(getCodeMirrorLanguageExtension(props.language)),
-                themeCompartment.of(props.theme === "dark" ? oneDark : []),
-            ],
-            },
-            b: {
-            doc: props.modified,
-            extensions: [
-                EditorView.editable.of(false),
-                EditorView.lineWrapping,
-                languageCompartment.of(getCodeMirrorLanguageExtension(props.language)),
-                themeCompartment.of(props.theme === "dark" ? oneDark : []),
-            ],
-            },
-            parent: containerRef.value,
-        });
-    }
-  }
+    destroyMergeView();
+    void mountMergeView();
+  },
 );
 
 watch(
-    () => props.theme,
-    (newTheme) => {
-        if (!mergeView) return;
-        const themeExt = newTheme === "dark" ? oneDark : [];
-        mergeView.a.dispatch({ effects: themeCompartment.reconfigure(themeExt) });
-        mergeView.b.dispatch({ effects: themeCompartment.reconfigure(themeExt) });
-    }
-)
+  () => props.theme,
+  (newTheme) => {
+    if (!mergeView) return;
+    const themeExt = newTheme === "dark" ? oneDark : [];
+    mergeView.a.dispatch({ effects: themeCompartment.reconfigure(themeExt) });
+    mergeView.b.dispatch({ effects: themeCompartment.reconfigure(themeExt) });
+  },
+);
 
 watch(
-    () => props.language,
-    (newLanguage) => {
-        if (!mergeView) return;
-        const languageExt = getCodeMirrorLanguageExtension(newLanguage);
-        mergeView.a.dispatch({ effects: languageCompartment.reconfigure(languageExt) });
-        mergeView.b.dispatch({ effects: languageCompartment.reconfigure(languageExt) });
+  () => props.language,
+  async (newLanguage) => {
+    if (!mergeView) return;
+
+    const requestId = ++languageRequestId;
+    let languageExt: Extension = [];
+    try {
+      languageExt = await loadCodeMirrorLanguageExtension(newLanguage);
+    } catch (error) {
+      console.error(
+        "[CodeMirrorMergeEditor] Failed to switch language extension",
+        error,
+      );
     }
-)
+
+    if (requestId !== languageRequestId || !mergeView) return;
+    mergeView.a.dispatch({ effects: languageCompartment.reconfigure(languageExt) });
+    mergeView.b.dispatch({ effects: languageCompartment.reconfigure(languageExt) });
+  },
+);
 
 </script>
 

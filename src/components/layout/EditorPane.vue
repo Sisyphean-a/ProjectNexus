@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, nextTick } from "vue";
+import { ref, computed, watch, nextTick, defineAsyncComponent } from "vue";
 import { useNexusStore } from "../../stores/useNexusStore";
 import { useThemeStore } from "../../stores/useThemeStore";
 import {
@@ -15,12 +15,17 @@ import {
   useMessage,
   useDialog,
 } from "naive-ui";
-import CodeMirrorEditor from "../CodeMirrorEditor.vue";
-import VersionHistory from "./VersionHistory.vue";
 import { cryptoProvider } from "../../services";
 import { DECRYPTION_PENDING_PREFIX } from "../../core/application/services/SyncService";
 import { localHistoryRepository } from "../../infrastructure/storage/LocalHistoryRepository";
 import { languageOptions } from "../../constants/languages";
+
+const CodeMirrorEditor = defineAsyncComponent(
+  () => import("../CodeMirrorEditor.vue"),
+);
+const VersionHistory = defineAsyncComponent(
+  () => import("./VersionHistory.vue"),
+);
 
 const emit = defineEmits<{
   "open-search": [];

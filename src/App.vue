@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { darkTheme, lightTheme, type GlobalThemeOverrides, NConfigProvider, NMessageProvider, NDialogProvider } from 'naive-ui'
 import { useAuthStore } from './stores/useAuthStore'
 import { useNexusStore } from './stores/useNexusStore'
 import { useThemeStore } from './stores/useThemeStore'
-import Welcome from './views/Welcome.vue'
-import CommandCenter from './views/CommandCenter.vue'
+const Welcome = defineAsyncComponent(() => import('./views/Welcome.vue'))
+const CommandCenter = defineAsyncComponent(() => import('./views/CommandCenter.vue'))
 
 const STARTUP_SYNC_DELAY_MS = 3000
 const STARTUP_SYNC_STALE_MS = 5 * 60 * 1000

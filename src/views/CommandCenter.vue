@@ -1,14 +1,23 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { defineAsyncComponent, ref } from "vue";
 import { NLayout, NLayoutSider, NLayoutContent } from "naive-ui";
 import { useThemeStore } from "../stores/useThemeStore";
-import Sidebar from "../components/layout/Sidebar.vue";
-import ConfigList from "../components/layout/ConfigList.vue";
-import EditorPane from "../components/layout/EditorPane.vue";
-import GlobalSearch from "../components/GlobalSearch.vue";
+
+const Sidebar = defineAsyncComponent(
+  () => import("../components/layout/Sidebar.vue"),
+);
+const ConfigList = defineAsyncComponent(
+  () => import("../components/layout/ConfigList.vue"),
+);
+const EditorPane = defineAsyncComponent(
+  () => import("../components/layout/EditorPane.vue"),
+);
+const GlobalSearch = defineAsyncComponent(
+  () => import("../components/GlobalSearch.vue"),
+);
 
 const themeStore = useThemeStore();
-const globalSearchRef = ref<InstanceType<typeof GlobalSearch> | null>(null);
+const globalSearchRef = ref<{ openSearch: () => void } | null>(null);
 
 function openSearch() {
   globalSearchRef.value?.openSearch();

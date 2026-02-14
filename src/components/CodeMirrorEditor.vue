@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, shallowRef, watch } from "vue";
 import { Codemirror } from "vue-codemirror";
 import { EditorView, keymap } from "@codemirror/view";
-import { EditorState } from "@codemirror/state";
+import { EditorState, type Extension } from "@codemirror/state";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { defaultKeymap, historyKeymap } from "@codemirror/commands";
 import { searchKeymap } from "@codemirror/search";
-import { getCodeMirrorLanguageExtension } from "./codemirror/languageExtensions";
+import { loadCodeMirrorLanguageExtension } from "./codemirror/languageExtensions";
 
 const props = defineProps<{
   modelValue: string;
@@ -36,11 +36,35 @@ const customKeymap = keymap.of([
   ...searchKeymap,
 ]);
 
+const languageExtension = shallowRef<Extension>([]);
+let languageRequestId = 0;
+
+watch(
+  () => props.language,
+  async (language) => {
+    const requestId = ++languageRequestId;
+    try {
+      const extension = await loadCodeMirrorLanguageExtension(language);
+      if (requestId !== languageRequestId) {
+        return;
+      }
+      languageExtension.value = extension;
+    } catch (error) {
+      if (requestId !== languageRequestId) {
+        return;
+      }
+      languageExtension.value = [];
+      console.error("[CodeMirrorEditor] Failed to load language extension", error);
+    }
+  },
+  { immediate: true },
+);
+
 const extensions = computed(() => {
   const exts = [
     customKeymap,
     EditorView.lineWrapping,
-    getCodeMirrorLanguageExtension(props.language),
+    languageExtension.value,
     EditorState.readOnly.of(props.readOnly || false),
   ];
   

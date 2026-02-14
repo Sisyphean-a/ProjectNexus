@@ -130,13 +130,41 @@ export default defineConfig(({ command }) => ({
       },
       output: {
         manualChunks(id) {
+          const normalizedId = id.replace(/\\/g, "/");
+
+          if (!normalizedId.includes("/node_modules/")) {
+            return;
+          }
+
           if (
-            id.includes("node_modules/vue") ||
-            id.includes("node_modules/pinia") ||
-            id.includes("node_modules/naive-ui") ||
-            id.includes("node_modules/@vueuse")
+            normalizedId.includes("/node_modules/naive-ui/") ||
+            normalizedId.includes("/node_modules/vueuc/") ||
+            normalizedId.includes("/node_modules/vooks/") ||
+            normalizedId.includes("/node_modules/seemly/") ||
+            normalizedId.includes("/node_modules/treemate/")
+          ) {
+            return "ui";
+          }
+
+          if (
+            normalizedId.includes("/node_modules/vue/") ||
+            normalizedId.includes("/node_modules/@vue/") ||
+            normalizedId.includes("/node_modules/pinia/") ||
+            normalizedId.includes("/node_modules/@vueuse/")
           ) {
             return "framework";
+          }
+
+          if (
+            normalizedId.includes("/node_modules/octokit/") ||
+            normalizedId.includes("/node_modules/@octokit/") ||
+            normalizedId.includes("/node_modules/bottleneck/")
+          ) {
+            return "github";
+          }
+
+          if (normalizedId.includes("/node_modules/dexie/")) {
+            return "storage";
           }
         },
       },
