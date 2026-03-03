@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, h } from "vue";
+import { ref, computed, h, watch } from "vue";
 import { useNexusStore } from "../../stores/useNexusStore";
 import { useThemeStore } from "../../stores/useThemeStore";
 import { cryptoProvider } from "../../services";
@@ -45,7 +45,34 @@ const contextMenuCategoryId = ref<string | null>(null);
 // Security Modal
 const showSecurityModal = ref(false);
 const vaultPasswordInput = ref("");
-const rememberVaultInSession = ref(false);
+const REMEMBER_VAULT_PREF_KEY = "nexus_remember_vault_in_session";
+const rememberVaultInSession = ref(readRememberVaultPreference());
+
+function readRememberVaultPreference(): boolean {
+  try {
+    const raw = window.localStorage.getItem(REMEMBER_VAULT_PREF_KEY);
+    if (raw === "0") return false;
+    if (raw === "1") return true;
+  } catch {
+    // ignore storage failures
+  }
+  return true;
+}
+
+function persistRememberVaultPreference(enabled: boolean): void {
+  try {
+    window.localStorage.setItem(
+      REMEMBER_VAULT_PREF_KEY,
+      enabled ? "1" : "0",
+    );
+  } catch {
+    // ignore storage failures
+  }
+}
+
+watch(rememberVaultInSession, (enabled) => {
+  persistRememberVaultPreference(enabled);
+});
 
 // 编辑分类模态框
 const showEditModal = ref(false);
@@ -524,7 +551,7 @@ function handleRepairShards() {
           @keydown.enter="handleSaveSecurity"
         />
         <div class="flex items-center justify-between text-xs">
-          <span>在当前会话内记住密码</span>
+          <span>在当前会话内记住密码（建议开启）</span>
           <NSwitch v-model:value="rememberVaultInSession" size="small" />
         </div>
       </div>

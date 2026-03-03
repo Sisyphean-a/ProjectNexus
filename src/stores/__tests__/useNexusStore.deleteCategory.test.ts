@@ -18,6 +18,9 @@ const mocks = vi.hoisted(() => {
       updateFileMetadata: vi.fn(),
       deleteFile: vi.fn(),
     },
+    cryptoProvider: {
+      hasPassword: vi.fn(() => true),
+    },
     fileRepository: {
       get: vi.fn(),
       delete: vi.fn(),
@@ -57,6 +60,7 @@ vi.mock("../../infrastructure", () => ({
 vi.mock("../../services", () => ({
   syncService: mocks.syncService,
   fileService: mocks.fileService,
+  cryptoProvider: mocks.cryptoProvider,
 }));
 
 vi.mock("../useAuthStore", () => ({

@@ -322,8 +322,13 @@ async function handleSave() {
     await nexusStore.saveFileContent(nexusStore.selectedFileId, code.value);
     isDirty.value = false;
     message.success("已保存并同步");
-  } catch (e) {
-    message.error("保存失败");
+  } catch (e: unknown) {
+    const errorMessage = e instanceof Error ? e.message : "未知错误";
+    if (errorMessage.includes("Vault password not set")) {
+      message.error("保险库密码未设置，请先在侧边栏设置密码后再保存");
+    } else {
+      message.error(`保存失败: ${errorMessage}`);
+    }
     console.error(e);
   } finally {
     savingMessage.destroy();

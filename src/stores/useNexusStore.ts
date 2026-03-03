@@ -8,9 +8,12 @@ import {
   gistRepository,
   localHistoryRepository,
 } from "../infrastructure";
-import { syncService, fileService } from "../services";
+import { syncService, fileService, cryptoProvider } from "../services";
 import type { NexusIndex, NexusConfig } from "../core/domain/entities/types";
-import type { RepairShardsOptions } from "../core/application/services/SyncService";
+import {
+  DECRYPTION_PENDING_PREFIX,
+  type RepairShardsOptions,
+} from "../core/application/services/SyncService";
 import { IdGenerator } from "../core/domain/shared/IdGenerator";
 import { useAuthStore } from "./useAuthStore";
 
@@ -109,6 +112,10 @@ export const useNexusStore = defineStore("nexus", () => {
     }
 
     ensureDefaultSelection();
+
+    if (!cryptoProvider.hasPassword()) {
+      await resetSecureCache();
+    }
   }
 
   async function sync(force = false) {
@@ -209,7 +216,23 @@ export const useNexusStore = defineStore("nexus", () => {
   // ========== Content Actions ==========
   async function getFileContent(fileId: string): Promise<string> {
     const file = await fileRepository.get(fileId);
-    return file ? file.content : "";
+    if (!file) {
+      return "";
+    }
+
+    if (!file.isSecure || cryptoProvider.hasPassword()) {
+      return file.content;
+    }
+
+    if (!file.isDirty) {
+      try {
+        await fileRepository.delete(file.id);
+      } catch (e) {
+        console.warn(`[Nexus] Failed to clear secure cached file ${file.id}`, e);
+      }
+    }
+
+    return DECRYPTION_PENDING_PREFIX;
   }
 
   async function saveFileContent(fileId: string, content: string) {

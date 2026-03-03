@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { createConfig } from "../../../tests/factories/createConfig";
+import { DECRYPTION_PENDING_PREFIX } from "../../core/application/services/SyncService";
 import {
   createCategory,
   createIndex,
@@ -24,6 +25,9 @@ const mocks = vi.hoisted(() => ({
     changeLanguage: vi.fn(),
     updateFileMetadata: vi.fn(),
     deleteFile: vi.fn(),
+  },
+  cryptoProvider: {
+    hasPassword: vi.fn(() => true),
   },
   fileRepository: {
     get: vi.fn(),
@@ -63,6 +67,7 @@ vi.mock("../../infrastructure", () => ({
 vi.mock("../../services", () => ({
   syncService: mocks.syncService,
   fileService: mocks.fileService,
+  cryptoProvider: mocks.cryptoProvider,
 }));
 
 vi.mock("../useAuthStore", () => ({
@@ -77,6 +82,7 @@ describe("useNexusStore behaviors", () => {
     vi.clearAllMocks();
     vi.useRealTimers();
     mocks.authState.isAuthenticated = true;
+    mocks.cryptoProvider.hasPassword.mockReturnValue(true);
 
     mocks.localStoreRepository.getConfig.mockResolvedValue(createConfig());
     mocks.localStoreRepository.getIndex.mockResolvedValue(
@@ -121,6 +127,22 @@ describe("useNexusStore behaviors", () => {
 
     expect(store.index?.categories.map((c) => c.id)).toEqual(["cat-a", "cat-b"]);
     expect(store.selectedCategoryId).toBe("cat-a");
+  });
+
+  it("getFileContent 在未设置保险库密码时隐藏安全文件明文", async () => {
+    const store = useNexusStore();
+    mocks.cryptoProvider.hasPassword.mockReturnValue(false);
+    mocks.fileRepository.get.mockResolvedValue({
+      id: "file-secure",
+      content: "plain-secret",
+      isSecure: true,
+      isDirty: false,
+    });
+
+    const content = await store.getFileContent("file-secure");
+
+    expect(content).toBe(DECRYPTION_PENDING_PREFIX);
+    expect(mocks.fileRepository.delete).toHaveBeenCalledWith("file-secure");
   });
 
   it("syncIfStale 在阈值内跳过远程同步", async () => {
