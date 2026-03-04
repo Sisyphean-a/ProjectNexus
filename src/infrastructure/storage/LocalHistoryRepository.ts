@@ -107,6 +107,10 @@ export class LocalHistoryRepository {
   async deleteFileHistory(fileId: string): Promise<void> {
     await nexusDb.history.where("fileId").equals(fileId).delete();
   }
+
+  async clearAll(): Promise<void> {
+    await nexusDb.history.clear();
+  }
 }
 
 export const localHistoryRepository = new LocalHistoryRepository();

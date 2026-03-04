@@ -47,6 +47,22 @@ export class LocalStoreRepository implements ILocalStore {
     }
   }
 
+  private async remove(keys: string | string[]): Promise<void> {
+    if (this.isExtension) {
+      await chrome.storage.local.remove(keys)
+      return
+    }
+
+    if (Array.isArray(keys)) {
+      for (const key of keys) {
+        localStorage.removeItem(key)
+      }
+      return
+    }
+
+    localStorage.removeItem(keys)
+  }
+
   async getConfig(): Promise<NexusConfig> {
     if (this.configCache) {
       return { ...this.configCache }
@@ -105,5 +121,30 @@ export class LocalStoreRepository implements ILocalStore {
 
   async saveCache(filename: string, content: string): Promise<void> {
     await this.set(CACHE_PREFIX + filename, content)
+  }
+
+  async clearIndexAndCaches(): Promise<void> {
+    const keysToRemove = [INDEX_KEY]
+    this.indexCache = null
+    this.indexPromise = null
+
+    if (this.isExtension) {
+      const all = await chrome.storage.local.get(null)
+      for (const key of Object.keys(all || {})) {
+        if (key.startsWith(CACHE_PREFIX)) {
+          keysToRemove.push(key)
+        }
+      }
+      await this.remove(keysToRemove)
+      return
+    }
+
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i)
+      if (key && key.startsWith(CACHE_PREFIX)) {
+        keysToRemove.push(key)
+      }
+    }
+    await this.remove(keysToRemove)
   }
 }

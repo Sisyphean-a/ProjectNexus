@@ -258,7 +258,43 @@ async function handleSync() {
   }
 }
 
+const isForcePulling = ref(false);
+
+function handleForcePull() {
+  releaseActiveFocus();
+  dialog.warning({
+    title: "强制拉取覆盖",
+    content:
+      "此操作会删除本地全部文档缓存与历史记录，并以远程版本完整覆盖本地。未同步的本地改动将永久丢失。确认继续吗？",
+    positiveText: "删除本地并拉取",
+    negativeText: "取消",
+    onPositiveClick: () => {
+      isForcePulling.value = true;
+      const forcingMessage = message.loading("正在强制拉取远程数据...", {
+        duration: 0,
+      });
+      void (async () => {
+        try {
+          await nexusStore.forcePullFromRemote();
+          message.success("强制拉取完成，已采用远程数据");
+        } catch (e) {
+          console.error("Force pull failed", e);
+          const detail = e instanceof Error ? e.message : "未知错误";
+          message.error(`强制拉取失败：${detail}`);
+        } finally {
+          forcingMessage.destroy();
+          isForcePulling.value = false;
+        }
+      })();
+    },
+  });
+}
+
 const isRepairing = ref(false);
+const isSyncBusy = computed(
+  () =>
+    nexusStore.isLoading || isSyncing.value || isRepairing.value || isForcePulling.value,
+);
 
 function formatRepairSummary(result: {
   rawShardCount: number;
@@ -441,14 +477,34 @@ function handleRepairShards() {
         class="flex items-center justify-between text-xs"
         :class="themeStore.isDark ? 'text-slate-500' : 'text-slate-400'"
       >
-        <span>{{
-          nexusStore.isLoading || isSyncing || isRepairing ? "同步中..." : "已同步"
-        }}</span>
-        <NButton text size="tiny" :loading="isSyncing" @click="handleSync">
-          <template #icon>
-            <div class="i-heroicons-arrow-path w-4 h-4"></div>
-          </template>
-        </NButton>
+        <span>{{ isSyncBusy ? "同步中..." : "已同步" }}</span>
+        <div class="flex items-center gap-1">
+          <NButton
+            text
+            size="tiny"
+            :loading="isSyncing"
+            :disabled="isSyncBusy && !isSyncing"
+            @click="handleSync"
+            title="常规同步"
+          >
+            <template #icon>
+              <div class="i-heroicons-arrow-path w-4 h-4"></div>
+            </template>
+          </NButton>
+          <NButton
+            text
+            size="tiny"
+            type="error"
+            :loading="isForcePulling"
+            :disabled="isSyncBusy && !isForcePulling"
+            @click="handleForcePull"
+            title="强制拉取覆盖（删除本地数据并采用远程）"
+          >
+            <template #icon>
+              <div class="i-heroicons-arrow-down-tray w-4 h-4"></div>
+            </template>
+          </NButton>
+        </div>
       </div>
 
       <!-- API Rate Limit -->

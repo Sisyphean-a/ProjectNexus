@@ -22,6 +22,10 @@ export class LocalFileRepository implements IFileRepository {
     await nexusDb.files.delete(id);
   }
 
+  async clearAll(): Promise<void> {
+    await nexusDb.files.clear();
+  }
+
   private toRecord(file: NexusFile): LocalFile {
     return {
       id: file.id,

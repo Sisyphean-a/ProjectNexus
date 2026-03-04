@@ -94,6 +94,170 @@ export const useNexusStore = defineStore("nexus", () => {
     }
   }
 
+  async function clearLocalDataForForcePull() {
+    await Promise.all([
+      fileRepository.clearAll(),
+      localHistoryRepository.clearAll(),
+      localStoreRepository.clearIndexAndCaches(),
+    ]);
+
+    index.value = null;
+    selectedCategoryId.value = null;
+    selectedFileId.value = null;
+    remoteUpdatedAt.value = null;
+    lastSyncedAt.value = null;
+  }
+
+  async function ensureConfigLoaded() {
+    if (!config.value) {
+      config.value = await localStoreRepository.getConfig();
+    }
+  }
+
+  function isGistNotFoundError(error: unknown): boolean {
+    if (!error || typeof error !== "object") {
+      return false;
+    }
+    const status = (error as { status?: number }).status;
+    if (status === 404) {
+      return true;
+    }
+    const message = (error as { message?: string }).message || "";
+    return message.includes("Not Found");
+  }
+
+  async function syncConfigWithResolvedRoot(rootGistId: string) {
+    if (!config.value) {
+      return;
+    }
+    const updates: Partial<NexusConfig> = {};
+    if (config.value.rootGistId !== rootGistId) {
+      updates.rootGistId = rootGistId;
+    }
+    if (config.value.gistId !== rootGistId) {
+      updates.gistId = rootGistId;
+    }
+    if (Object.keys(updates).length > 0) {
+      await updateConfig(updates);
+    }
+  }
+
+  async function resolveRemoteRootBeforeForcePull() {
+    await ensureConfigLoaded();
+    const configuredRoot = config.value?.rootGistId || config.value?.gistId || null;
+    if (configuredRoot) {
+      try {
+        await gistRepository.fetchGist(configuredRoot);
+        return;
+      } catch (e) {
+        if (!isGistNotFoundError(e)) {
+          throw e;
+        }
+      }
+    }
+
+    const discoveredRoot = await gistRepository.findNexusGist();
+    if (!discoveredRoot) {
+      if (configuredRoot) {
+        throw new Error(
+          `配置的远程 Gist 不存在或无权限访问（${configuredRoot}），且未找到可用 Nexus Gist`,
+        );
+      }
+      throw new Error("未找到可用 Nexus Gist，请先初始化");
+    }
+    await syncConfigWithResolvedRoot(discoveredRoot);
+  }
+
+  function applySyncResult(
+    result: {
+      synced: boolean;
+      index: NexusIndex | null;
+      gistUpdatedAt?: string;
+    },
+    purgeLocalBeforeSync: boolean,
+  ) {
+    if (result.synced && result.index) {
+      index.value = result.index;
+    }
+
+    if (result.synced) {
+      if (result.gistUpdatedAt) {
+        remoteUpdatedAt.value = result.gistUpdatedAt;
+      } else if (result.index?.updated_at) {
+        remoteUpdatedAt.value = result.index.updated_at;
+      }
+
+      lastSyncedAt.value = new Date().toISOString();
+      ensureDefaultSelection();
+      console.log(
+        purgeLocalBeforeSync
+          ? "[Nexus Sync] 强制拉取覆盖完成"
+          : "[Nexus Sync] 同步完成",
+      );
+      return;
+    }
+
+    ensureDefaultSelection();
+    console.log("[Nexus Sync] 本地已是最新");
+  }
+
+  async function performSync(force: boolean, purgeLocalBeforeSync: boolean) {
+    await ensureConfigLoaded();
+
+    if (purgeLocalBeforeSync) {
+      await resolveRemoteRootBeforeForcePull();
+      await clearLocalDataForForcePull();
+    }
+
+    const result = await syncService.syncDown(
+      config.value!,
+      force ? null : remoteUpdatedAt.value,
+    );
+
+    if (result.configUpdates) {
+      await updateConfig(result.configUpdates);
+    }
+
+    applySyncResult(result, purgeLocalBeforeSync);
+  }
+
+  async function runSync({
+    force,
+    purgeLocalBeforeSync,
+  }: {
+    force: boolean;
+    purgeLocalBeforeSync: boolean;
+  }) {
+    if (!authStore.isAuthenticated) {
+      throw new Error("未认证");
+    }
+
+    if (activeSyncPromise) {
+      await activeSyncPromise;
+      if (!force && !purgeLocalBeforeSync) {
+        return;
+      }
+    }
+
+    activeSyncPromise = (async () => {
+      isLoading.value = true;
+      lastSyncAttemptAt.value = new Date().toISOString();
+
+      try {
+        await performSync(force, purgeLocalBeforeSync);
+      } catch (e: any) {
+        console.error("[Nexus] 同步失败:", e);
+        throw e;
+      } finally {
+        isLoading.value = false;
+      }
+    })().finally(() => {
+      activeSyncPromise = null;
+    });
+
+    await activeSyncPromise;
+  }
+
   async function init() {
     config.value = await localStoreRepository.getConfig();
 
@@ -119,68 +283,11 @@ export const useNexusStore = defineStore("nexus", () => {
   }
 
   async function sync(force = false) {
-    if (!authStore.isAuthenticated) {
-      throw new Error("未认证");
-    }
+    await runSync({ force, purgeLocalBeforeSync: false });
+  }
 
-    if (activeSyncPromise) {
-      await activeSyncPromise;
-      if (!force) {
-        return;
-      }
-    }
-
-    activeSyncPromise = (async () => {
-      isLoading.value = true;
-      lastSyncAttemptAt.value = new Date().toISOString();
-
-      try {
-        if (!config.value) {
-          config.value = await localStoreRepository.getConfig();
-        }
-
-        // 如果强制同步，传入 null 作为上次更新时间以忽略增量检查
-        const result = await syncService.syncDown(
-          config.value!,
-          force ? null : remoteUpdatedAt.value,
-        );
-
-        if (result.configUpdates) {
-          await updateConfig(result.configUpdates);
-        }
-
-        if (result.synced) {
-          if (result.index) {
-            index.value = result.index;
-          }
-
-          // 优先使用 Gist 的 updated_at，如果未提供（本地已最新且无返回），则保持原样或使用 Index 内部时间
-          // 但注意：syncDown 返回的 gistUpdatedAt 是 Gist 的 container updated_at。
-          if (result.gistUpdatedAt) {
-            remoteUpdatedAt.value = result.gistUpdatedAt;
-          } else if (result.index?.updated_at) {
-            // Fallback，但这可能就是问题所在，所以仅当 gistUpdatedAt 确实不存在时使用
-            remoteUpdatedAt.value = result.index.updated_at;
-          }
-
-          lastSyncedAt.value = new Date().toISOString();
-          ensureDefaultSelection();
-          console.log("[Nexus Sync] 同步完成");
-        } else {
-          ensureDefaultSelection();
-          console.log("[Nexus Sync] 本地已是最新");
-        }
-      } catch (e: any) {
-        console.error("[Nexus] 同步失败:", e);
-        throw e;
-      } finally {
-        isLoading.value = false;
-      }
-    })().finally(() => {
-      activeSyncPromise = null;
-    });
-
-    await activeSyncPromise;
+  async function forcePullFromRemote() {
+    await runSync({ force: true, purgeLocalBeforeSync: true });
   }
 
   async function syncIfStale(maxStaleMs = DEFAULT_SYNC_STALE_MS) {
@@ -775,6 +882,7 @@ export const useNexusStore = defineStore("nexus", () => {
     syncCooldownMs,
     init,
     sync,
+    forcePullFromRemote,
     syncIfStale,
     initializeGist,
     updateConfig,

@@ -100,7 +100,9 @@ export class SyncService {
       }
     }
 
-    const rootMeta = await this.gistRepo.fetchGist(rootGistId);
+    const resolvedRoot = await this.resolveAccessibleRootGist(rootGistId);
+    rootGistId = resolvedRoot.rootGistId;
+    const rootMeta = resolvedRoot.rootMeta;
     const remoteTime = rootMeta.updated_at as string;
 
     const canSkip =
@@ -947,6 +949,41 @@ export class SyncService {
     }
 
     return Object.keys(updates).length > 0 ? updates : undefined;
+  }
+
+  private async resolveAccessibleRootGist(
+    rootGistId: string,
+  ): Promise<{ rootGistId: string; rootMeta: any }> {
+    try {
+      const rootMeta = await this.gistRepo.fetchGist(rootGistId);
+      return { rootGistId, rootMeta };
+    } catch (e) {
+      if (!this.isNotFoundError(e)) {
+        throw e;
+      }
+    }
+
+    const discoveredRoot = await this.gistRepo.findNexusGist();
+    if (!discoveredRoot) {
+      throw new Error(
+        `配置的远程 Gist 不存在或无权限访问（${rootGistId}），且未找到可用 Nexus Gist`,
+      );
+    }
+
+    const rootMeta = await this.gistRepo.fetchGist(discoveredRoot);
+    return { rootGistId: discoveredRoot, rootMeta };
+  }
+
+  private isNotFoundError(error: unknown): boolean {
+    if (!error || typeof error !== "object") {
+      return false;
+    }
+    const status = (error as { status?: number }).status;
+    if (status === 404) {
+      return true;
+    }
+    const message = (error as { message?: string }).message || "";
+    return message.includes("Not Found");
   }
 
   private ensureV2Index(index: NexusIndex): NexusIndex {

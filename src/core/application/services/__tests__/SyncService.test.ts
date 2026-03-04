@@ -112,6 +112,39 @@ describe("SyncService", () => {
     expect(result.configUpdates).toEqual({ rootGistId: "root-1" });
   });
 
+  it("syncDown 在配置 gist 404 时会自动重定位到可用 root gist", async () => {
+    const { gistRepo, service } = createDeps();
+    const remoteIndex = createIndex({
+      categories: [createCategory({ id: "cat-a", items: [] })],
+      shards: [],
+    });
+
+    gistRepo.fetchGist
+      .mockRejectedValueOnce({ status: 404, message: "Not Found" })
+      .mockResolvedValueOnce({ updated_at: "2026-02-01T00:00:00.000Z" });
+    gistRepo.findNexusGist.mockResolvedValue("root-2");
+    gistRepo.getGistFilesByNames.mockResolvedValue({
+      "nexus_index_v2.json": {
+        content: JSON.stringify(remoteIndex),
+      },
+      "nexus_shards.json": {
+        content: "[]",
+      },
+    });
+
+    const result = await service.syncDown(
+      createConfig({ gistId: "root-1", rootGistId: "root-1", schemaVersion: 2 }),
+      null,
+    );
+
+    expect(gistRepo.findNexusGist).toHaveBeenCalledTimes(1);
+    expect(result.synced).toBe(true);
+    expect(result.configUpdates).toEqual({
+      rootGistId: "root-2",
+      gistId: "root-2",
+    });
+  });
+
   it("syncDown 会加载 v2 index 并执行 shard 拉取流程", async () => {
     const { gistRepo, localStore, service } = createDeps();
     const pullSpy = vi

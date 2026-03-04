@@ -33,12 +33,14 @@ const mocks = vi.hoisted(() => ({
     get: vi.fn(),
     delete: vi.fn(),
     save: vi.fn(),
+    clearAll: vi.fn(),
   },
   localStoreRepository: {
     getConfig: vi.fn(),
     getIndex: vi.fn(),
     saveConfig: vi.fn(),
     saveIndex: vi.fn(),
+    clearIndexAndCaches: vi.fn(),
   },
   gistRepository: {
     rateLimit: {
@@ -46,6 +48,8 @@ const mocks = vi.hoisted(() => ({
       remaining: 5000,
       resetAt: 0,
     },
+    fetchGist: vi.fn(),
+    findNexusGist: vi.fn(),
     getGistHistory: vi.fn(),
     getGistVersion: vi.fn(),
   },
@@ -54,6 +58,7 @@ const mocks = vi.hoisted(() => ({
     pruneHistory: vi.fn(),
     deleteFileHistory: vi.fn(),
     getHistory: vi.fn(),
+    clearAll: vi.fn(),
   },
 }));
 
@@ -93,6 +98,14 @@ describe("useNexusStore behaviors", () => {
 
     mocks.localHistoryRepository.addSnapshot.mockResolvedValue(1);
     mocks.localHistoryRepository.pruneHistory.mockResolvedValue(undefined);
+    mocks.localHistoryRepository.clearAll.mockResolvedValue(undefined);
+    mocks.fileRepository.clearAll.mockResolvedValue(undefined);
+    mocks.localStoreRepository.clearIndexAndCaches.mockResolvedValue(undefined);
+    mocks.gistRepository.fetchGist.mockResolvedValue({
+      id: "root-gist",
+      updated_at: "2026-01-01T00:00:00.000Z",
+    });
+    mocks.gistRepository.findNexusGist.mockResolvedValue("root-gist");
     mocks.gistRepository.getGistHistory.mockResolvedValue([]);
     mocks.gistRepository.getGistVersion.mockResolvedValue({});
   });
@@ -110,6 +123,96 @@ describe("useNexusStore behaviors", () => {
     await store.sync(true);
 
     expect(mocks.syncService.syncDown).toHaveBeenCalledWith(store.config, null);
+  });
+
+  it("forcePullFromRemote 会先清空本地数据再拉取远程覆盖", async () => {
+    const store = useNexusStore();
+    const remoteIndex = createIndex({
+      categories: [createCategory({ id: "remote-cat", items: [] })],
+    });
+    store.config = createConfig();
+    store.index = createIndex({
+      categories: [createCategory({ id: "local-cat", items: [createIndexItem()] })],
+    });
+    store.selectedCategoryId = "local-cat";
+    store.selectedFileId = "local-file";
+    store.remoteUpdatedAt = "2026-01-01T00:00:00.000Z";
+
+    mocks.syncService.syncDown.mockResolvedValue({
+      synced: true,
+      index: remoteIndex,
+      gistUpdatedAt: "2026-01-03T00:00:00.000Z",
+    });
+
+    await store.forcePullFromRemote();
+
+    expect(mocks.fileRepository.clearAll).toHaveBeenCalledTimes(1);
+    expect(mocks.localHistoryRepository.clearAll).toHaveBeenCalledTimes(1);
+    expect(mocks.localStoreRepository.clearIndexAndCaches).toHaveBeenCalledTimes(1);
+    expect(mocks.syncService.syncDown).toHaveBeenCalledWith(store.config, null);
+    expect(store.index?.categories.map((cat) => cat.id)).toEqual(["remote-cat"]);
+    expect(store.selectedCategoryId).toBe("remote-cat");
+    expect(store.selectedFileId).toBe(null);
+    expect(store.remoteUpdatedAt).toBe("2026-01-03T00:00:00.000Z");
+    expect(store.lastSyncedAt).toBeTruthy();
+  });
+
+  it("forcePullFromRemote 在配置 gist 404 时会先重定位再清空本地", async () => {
+    const store = useNexusStore();
+    const remoteIndex = createIndex({
+      categories: [createCategory({ id: "remote-cat", items: [] })],
+    });
+    store.config = createConfig({
+      gistId: "missing-root",
+      rootGistId: "missing-root",
+    });
+
+    mocks.gistRepository.fetchGist.mockRejectedValueOnce({
+      status: 404,
+      message: "Not Found",
+    });
+    mocks.gistRepository.findNexusGist.mockResolvedValueOnce("new-root");
+    mocks.syncService.syncDown.mockResolvedValue({
+      synced: true,
+      index: remoteIndex,
+      gistUpdatedAt: "2026-01-03T00:00:00.000Z",
+    });
+
+    await store.forcePullFromRemote();
+
+    expect(mocks.localStoreRepository.saveConfig).toHaveBeenCalledWith({
+      rootGistId: "new-root",
+      gistId: "new-root",
+    });
+    expect(mocks.syncService.syncDown).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rootGistId: "new-root",
+        gistId: "new-root",
+      }),
+      null,
+    );
+    expect(
+      mocks.gistRepository.fetchGist.mock.invocationCallOrder[0],
+    ).toBeLessThan(mocks.fileRepository.clearAll.mock.invocationCallOrder[0]);
+  });
+
+  it("forcePullFromRemote 在远程不可达时不会清空本地", async () => {
+    const store = useNexusStore();
+    store.config = createConfig({
+      gistId: "missing-root",
+      rootGistId: "missing-root",
+    });
+
+    mocks.gistRepository.fetchGist.mockRejectedValueOnce({
+      status: 404,
+      message: "Not Found",
+    });
+    mocks.gistRepository.findNexusGist.mockResolvedValueOnce(null);
+
+    await expect(store.forcePullFromRemote()).rejects.toThrow("未找到");
+    expect(mocks.fileRepository.clearAll).not.toHaveBeenCalled();
+    expect(mocks.localHistoryRepository.clearAll).not.toHaveBeenCalled();
+    expect(mocks.localStoreRepository.clearIndexAndCaches).not.toHaveBeenCalled();
   });
 
   it("init 会加载本地 index 并默认选中首分类", async () => {
