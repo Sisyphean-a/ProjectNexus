@@ -13,6 +13,7 @@ const NEXUS_GIST_DESCRIPTION =
 const NEXUS_INDEX_FILENAME = "nexus_index.json";
 const NEXUS_INDEX_V2_FILENAME = "nexus_index_v2.json";
 const NEXUS_SHARDS_FILENAME = "nexus_shards.json";
+const NEXUS_SHARD_STATE_FILENAME = "nexus_shard_state.json";
 const SHARD_MANIFEST_FILENAME = "shard_manifest.json";
 
 interface GithubGistFile {
@@ -184,6 +185,17 @@ export class GistRepository implements IGistRepository {
       };
       files[NEXUS_SHARDS_FILENAME] = {
         content: JSON.stringify(initialIndex.shards || [], null, 2),
+      };
+      files[NEXUS_SHARD_STATE_FILENAME] = {
+        content: JSON.stringify(
+          {
+            version: 1,
+            updated_at: new Date().toISOString(),
+            shards: [],
+          },
+          null,
+          2,
+        ),
       };
     } else {
       files[NEXUS_INDEX_FILENAME] = {

@@ -142,6 +142,7 @@ describe("SyncService", () => {
     expect(result.configUpdates).toEqual({
       rootGistId: "root-2",
       gistId: "root-2",
+      shardStateDigest: {},
     });
   });
 
@@ -246,9 +247,15 @@ describe("SyncService", () => {
     const { gistRepo, fileRepo, cryptoProvider, service } = createDeps();
     const upsertSpy = vi
       .spyOn((service as any).shardManifestService, "upsert")
-      .mockResolvedValue(undefined);
+      .mockResolvedValue({
+        version: 1,
+        shardId: "shard-1",
+        updated_at: "2026-04-01T00:00:00.000Z",
+        files: [],
+      });
 
     gistRepo.updateGistFile.mockResolvedValue("2026-04-01T00:00:00.000Z");
+    gistRepo.getGistFilesByNames.mockResolvedValue({});
     cryptoProvider.hasPassword.mockReturnValue(true);
     cryptoProvider.encrypt.mockResolvedValue("cipher-text");
 
@@ -281,9 +288,15 @@ describe("SyncService", () => {
     const { gistRepo, service } = createDeps();
     const removeSpy = vi
       .spyOn((service as any).shardManifestService, "removeByStorage")
-      .mockResolvedValue(undefined);
+      .mockResolvedValue({
+        version: 1,
+        shardId: "shard-x",
+        updated_at: "2026-05-01T00:00:00.000Z",
+        files: [],
+      });
 
     gistRepo.updateGistFile.mockResolvedValue("2026-05-01T00:00:00.000Z");
+    gistRepo.getGistFilesByNames.mockResolvedValue({});
     const index = createIndex();
     const storage = {
       shardId: "shard-x",

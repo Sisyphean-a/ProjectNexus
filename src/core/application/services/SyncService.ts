@@ -20,6 +20,7 @@ export const DECRYPTION_PENDING_PREFIX = "__NEXUS_DECRYPT_PENDING__";
 const NEXUS_INDEX_FILENAME = "nexus_index.json";
 const NEXUS_INDEX_V2_FILENAME = "nexus_index_v2.json";
 const NEXUS_SHARDS_FILENAME = "nexus_shards.json";
+const NEXUS_SHARD_STATE_FILENAME = "nexus_shard_state.json";
 const SHARD_MANIFEST_FILENAME = "shard_manifest.json";
 
 const SHARD_TARGET_BYTES = 3 * 1024 * 1024;
@@ -41,6 +42,21 @@ interface IndexedItem {
 
 interface ShardFetchPlan {
   [gistId: string]: Set<string>;
+}
+
+interface ShardStateItem {
+  shardId: string;
+  gistId: string;
+  manifestHash: string;
+  updated_at: string;
+  fileCount: number;
+  totalBytes: number;
+}
+
+interface ShardStateIndex {
+  version: 1;
+  updated_at: string;
+  shards: ShardStateItem[];
 }
 
 export interface RepairShardsOptions {
@@ -118,6 +134,7 @@ export class SyncService {
     const rootFiles = await this.gistRepo.getGistFilesByNames(rootGistId, [
       NEXUS_INDEX_V2_FILENAME,
       NEXUS_SHARDS_FILENAME,
+      NEXUS_SHARD_STATE_FILENAME,
       NEXUS_INDEX_FILENAME,
     ]);
 
@@ -130,15 +147,25 @@ export class SyncService {
       );
       remoteIndex.shards = this.parseShards(rootFiles[NEXUS_SHARDS_FILENAME]?.content, remoteIndex.shards || []);
       this.hydrateShardCategoryNames(remoteIndex);
-
-      await this.pullShardChanges(remoteIndex);
+      const remoteShardState = this.parseShardState(
+        rootFiles[NEXUS_SHARD_STATE_FILENAME]?.content,
+      );
+      const changedShardGists = this.getChangedShardGists(
+        config.shardStateDigest || {},
+        remoteShardState,
+        lastRemoteUpdatedAt,
+      );
+      await this.pullShardChanges(remoteIndex, changedShardGists);
       await this.localStore.saveIndex(remoteIndex);
 
       return {
         index: remoteIndex,
         synced: true,
         gistUpdatedAt: remoteTime,
-        configUpdates: this.createRootConfigUpdate(config, rootGistId),
+        configUpdates: {
+          ...(this.createRootConfigUpdate(config, rootGistId) || {}),
+          shardStateDigest: this.buildShardDigest(remoteShardState),
+        },
       };
     }
 
@@ -282,12 +309,23 @@ export class SyncService {
       contentToPush,
     );
 
-    await this.shardManifestService.upsert(index, item, file, contentTime);
+    const updatedManifest = await this.shardManifestService.upsert(
+      index,
+      item,
+      file,
+      contentTime,
+    );
+    const rootTime = await this.updateRootShardState(
+      rootGistId,
+      index,
+      item.storage.gistId,
+      updatedManifest,
+    );
 
     file.markClean();
     await this.fileRepo.save(file);
 
-    return contentTime;
+    return rootTime || contentTime;
   }
 
   async deleteRemoteFile(
@@ -309,12 +347,18 @@ export class SyncService {
         filename,
         null,
       );
-      await this.shardManifestService.removeByStorage(
+      const manifest = await this.shardManifestService.removeByStorage(
         index,
         fileId,
         storageOverride,
       );
-      return deletionTime;
+      const rootTime = await this.updateRootShardState(
+        rootGistId,
+        index,
+        storageOverride.gistId,
+        manifest,
+      );
+      return rootTime || deletionTime;
     }
 
     const item = this.findItemById(index, fileId)?.item;
@@ -328,8 +372,14 @@ export class SyncService {
       null,
     );
 
-    await this.shardManifestService.removeByItem(index, item);
-    return deletionTime;
+    const manifest = await this.shardManifestService.removeByItem(index, item);
+    const rootTime = await this.updateRootShardState(
+      rootGistId,
+      index,
+      item.storage.gistId,
+      manifest,
+    );
+    return rootTime || deletionTime;
   }
 
   async repairShards(
@@ -577,7 +627,10 @@ export class SyncService {
     return newTime;
   }
 
-  private async pullShardChanges(remoteIndex: NexusIndex): Promise<void> {
+  private async pullShardChanges(
+    remoteIndex: NexusIndex,
+    changedShardGists: Set<string> | null,
+  ): Promise<void> {
     const itemById = this.buildItemMapById(remoteIndex);
     const itemByStorageKey = this.buildItemMapByStorageKey(remoteIndex);
 
@@ -585,6 +638,9 @@ export class SyncService {
     const manifestsByShard = new Map<string, ShardManifest>();
 
     for (const shard of remoteIndex.shards || []) {
+      if (changedShardGists && !changedShardGists.has(shard.gistId)) {
+        continue;
+      }
       const manifest = await this.gistRepo.fetchShardManifest(shard.gistId);
       if (!manifest) {
         continue;
@@ -620,6 +676,9 @@ export class SyncService {
     const conflictFiles: NexusFile[] = [];
 
     for (const shard of remoteIndex.shards || []) {
+      if (changedShardGists && !changedShardGists.has(shard.gistId)) {
+        continue;
+      }
       const manifest = manifestsByShard.get(shard.gistId);
 
       if (!manifest) {
@@ -841,10 +900,12 @@ export class SyncService {
     }
 
     migratedIndex.updated_at = new Date().toISOString();
+    const shardState = this.buildShardStateForRoot(migratedIndex, manifestByShard);
 
     await this.gistRepo.updateBatch(rootGistId, {
       [NEXUS_INDEX_V2_FILENAME]: JSON.stringify(migratedIndex, null, 2),
       [NEXUS_SHARDS_FILENAME]: JSON.stringify(migratedIndex.shards || [], null, 2),
+      [NEXUS_SHARD_STATE_FILENAME]: JSON.stringify(shardState, null, 2),
     });
 
     await this.localStore.saveIndex(migratedIndex);
@@ -1016,6 +1077,173 @@ export class SyncService {
       console.warn("Failed to parse shard list from root", e);
       return fallback;
     }
+  }
+
+  private parseShardState(raw: string | undefined): ShardStateIndex | null {
+    if (!raw) {
+      return null;
+    }
+
+    try {
+      const parsed = JSON.parse(raw) as ShardStateIndex;
+      if (!parsed || !Array.isArray(parsed.shards)) {
+        return null;
+      }
+      return {
+        version: 1,
+        updated_at: parsed.updated_at || new Date().toISOString(),
+        shards: parsed.shards
+          .filter((row) => !!row.gistId && !!row.shardId && !!row.manifestHash)
+          .map((row) => ({
+            shardId: row.shardId,
+            gistId: row.gistId,
+            manifestHash: row.manifestHash,
+            updated_at: row.updated_at || new Date().toISOString(),
+            fileCount: row.fileCount || 0,
+            totalBytes: row.totalBytes || 0,
+          })),
+      };
+    } catch (e) {
+      console.warn("Failed to parse shard state from root", e);
+      return null;
+    }
+  }
+
+  private buildShardDigest(state: ShardStateIndex | null): Record<string, string> {
+    if (!state) {
+      return {};
+    }
+    const digest: Record<string, string> = {};
+    for (const row of state.shards) {
+      digest[row.gistId] = row.manifestHash;
+    }
+    return digest;
+  }
+
+  private getChangedShardGists(
+    localDigest: Record<string, string>,
+    remoteState: ShardStateIndex | null,
+    lastRemoteUpdatedAt: string | null,
+  ): Set<string> | null {
+    if (!remoteState || !lastRemoteUpdatedAt) {
+      return null;
+    }
+
+    const changed = new Set<string>();
+    for (const row of remoteState.shards) {
+      if (localDigest[row.gistId] !== row.manifestHash) {
+        changed.add(row.gistId);
+      }
+    }
+    return changed;
+  }
+
+  private async updateRootShardState(
+    rootGistId: string,
+    index: NexusIndex,
+    targetGistId: string,
+    manifest: ShardManifest | null,
+  ): Promise<string | null> {
+    const currentState = await this.loadRemoteShardState(rootGistId);
+    const byGist = new Map<string, ShardStateItem>();
+    for (const row of currentState.shards) {
+      byGist.set(row.gistId, row);
+    }
+
+    if (manifest) {
+      const descriptor = (index.shards || []).find((s) => s.gistId === targetGistId);
+      if (descriptor) {
+        byGist.set(targetGistId, this.buildStateItem(descriptor, manifest));
+      }
+    } else {
+      byGist.delete(targetGistId);
+    }
+
+    for (const shard of index.shards || []) {
+      if (!byGist.has(shard.gistId)) {
+        byGist.set(shard.gistId, {
+          shardId: shard.id,
+          gistId: shard.gistId,
+          manifestHash: "",
+          updated_at: shard.updated_at,
+          fileCount: shard.fileCount,
+          totalBytes: shard.totalBytes,
+        });
+      }
+    }
+
+    const nextState: ShardStateIndex = {
+      version: 1,
+      updated_at: new Date().toISOString(),
+      shards: Array.from(byGist.values()),
+    };
+    return this.gistRepo.updateGistFile(
+      rootGistId,
+      NEXUS_SHARD_STATE_FILENAME,
+      JSON.stringify(nextState, null, 2),
+    );
+  }
+
+  private async loadRemoteShardState(rootGistId: string): Promise<ShardStateIndex> {
+    const files = (await this.gistRepo.getGistFilesByNames(rootGistId, [
+      NEXUS_SHARD_STATE_FILENAME,
+    ])) || {};
+    const parsed = this.parseShardState(files[NEXUS_SHARD_STATE_FILENAME]?.content);
+    if (parsed) {
+      return parsed;
+    }
+    return {
+      version: 1,
+      updated_at: new Date().toISOString(),
+      shards: [],
+    };
+  }
+
+  private buildStateItem(
+    descriptor: ShardDescriptor,
+    manifest: ShardManifest,
+  ): ShardStateItem {
+    return {
+      shardId: descriptor.id,
+      gistId: descriptor.gistId,
+      manifestHash: this.calculateManifestHash(manifest),
+      updated_at: manifest.updated_at || descriptor.updated_at,
+      fileCount: manifest.files.length,
+      totalBytes: manifest.files.reduce((sum, file) => sum + (file.size || 0), 0),
+    };
+  }
+
+  private buildShardStateForRoot(
+    index: NexusIndex,
+    manifestByShard: Map<string, ShardManifest>,
+  ): ShardStateIndex {
+    const shards: ShardStateItem[] = [];
+    for (const descriptor of index.shards || []) {
+      const manifest = manifestByShard.get(descriptor.gistId);
+      if (!manifest) {
+        continue;
+      }
+      shards.push(this.buildStateItem(descriptor, manifest));
+    }
+    return {
+      version: 1,
+      updated_at: new Date().toISOString(),
+      shards,
+    };
+  }
+
+  private calculateManifestHash(manifest: ShardManifest): string {
+    const stableFiles = [...manifest.files]
+      .map((file) => ({
+        fileId: file.fileId,
+        filename: file.filename,
+        checksum: file.checksum,
+        updated_at: file.updated_at,
+        size: file.size,
+        isSecure: !!file.isSecure,
+      }))
+      .sort((a, b) => a.fileId.localeCompare(b.fileId));
+    return calculateChecksum(JSON.stringify(stableFiles));
   }
 
   private hydrateShardCategoryNames(index: NexusIndex): void {

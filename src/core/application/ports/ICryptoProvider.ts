@@ -1,5 +1,6 @@
 export interface SetPasswordOptions {
   rememberInSession?: boolean;
+  rememberMode?: "memory" | "session" | "trustedDevice";
 }
 
 export interface ICryptoProvider {

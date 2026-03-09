@@ -21,11 +21,11 @@ export class ShardManifestService {
     item: GistIndexItem,
     file: NexusFile,
     updatedAt: string,
-  ): Promise<void> {
-    if (!item.storage) return;
+  ): Promise<ShardManifest | null> {
+    if (!item.storage) return null;
 
     const descriptor = (index.shards || []).find((s) => s.id === item.storage!.shardId);
-    if (!descriptor) return;
+    if (!descriptor) return null;
 
     const manifest =
       (await this.gistRepo.fetchShardManifest(item.storage.gistId)) ||
@@ -64,19 +64,23 @@ export class ShardManifestService {
 
     descriptor.updated_at = updatedAt;
     await this.gistRepo.updateShardManifest(item.storage.gistId, manifest);
+    return manifest;
   }
 
-  async removeByItem(index: NexusIndex, item: GistIndexItem): Promise<void> {
-    if (!item.storage) return;
+  async removeByItem(
+    index: NexusIndex,
+    item: GistIndexItem,
+  ): Promise<ShardManifest | null> {
+    if (!item.storage) return null;
 
     const descriptor = (index.shards || []).find((s) => s.id === item.storage!.shardId);
-    if (!descriptor) return;
+    if (!descriptor) return null;
 
     const manifest = await this.gistRepo.fetchShardManifest(item.storage.gistId);
-    if (!manifest) return;
+    if (!manifest) return null;
 
     const target = manifest.files.find((f) => f.fileId === item.id);
-    if (!target) return;
+    if (!target) return manifest;
 
     manifest.files = manifest.files.filter((f) => f.fileId !== item.id);
     descriptor.fileCount = Math.max(0, descriptor.fileCount - 1);
@@ -84,21 +88,22 @@ export class ShardManifestService {
     descriptor.updated_at = new Date().toISOString();
 
     await this.gistRepo.updateShardManifest(item.storage.gistId, manifest);
+    return manifest;
   }
 
   async removeByStorage(
     index: NexusIndex,
     fileId: string,
     storage: NexusFileStorage,
-  ): Promise<void> {
+  ): Promise<ShardManifest | null> {
     const descriptor = (index.shards || []).find((s) => s.id === storage.shardId);
-    if (!descriptor) return;
+    if (!descriptor) return null;
 
     const manifest = await this.gistRepo.fetchShardManifest(storage.gistId);
-    if (!manifest) return;
+    if (!manifest) return null;
 
     const target = manifest.files.find((f) => f.fileId === fileId);
-    if (!target) return;
+    if (!target) return manifest;
 
     manifest.files = manifest.files.filter((f) => f.fileId !== fileId);
     descriptor.fileCount = Math.max(0, descriptor.fileCount - 1);
@@ -106,6 +111,7 @@ export class ShardManifestService {
     descriptor.updated_at = new Date().toISOString();
 
     await this.gistRepo.updateShardManifest(storage.gistId, manifest);
+    return manifest;
   }
 
   private byteLength(content: string): number {

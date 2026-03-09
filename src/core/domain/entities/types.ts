@@ -88,6 +88,10 @@ export interface NexusConfig {
   legacyGistId?: string | null;
   schemaVersion?: number;
   tokenVerifiedAt?: string | null;
+  shardStateDigest?: Record<string, string>;
+  vaultRememberMode?: "memory" | "session" | "trustedDevice";
+  vaultAutoLockMinutes?: number;
+  vaultTrustedUntil?: string | null;
   syncInterval: number; // in minutes
   theme: "dark" | "light" | "auto";
 }

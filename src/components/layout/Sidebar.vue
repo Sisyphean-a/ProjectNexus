@@ -12,7 +12,6 @@ import {
   NModal,
   NSpace,
   NSelect,
-  NSwitch,
   useMessage,
   useDialog,
 } from "naive-ui";
@@ -45,33 +44,40 @@ const contextMenuCategoryId = ref<string | null>(null);
 // Security Modal
 const showSecurityModal = ref(false);
 const vaultPasswordInput = ref("");
-const REMEMBER_VAULT_PREF_KEY = "nexus_remember_vault_in_session";
-const rememberVaultInSession = ref(readRememberVaultPreference());
+const REMEMBER_VAULT_PREF_KEY = "nexus_vault_remember_mode";
+const DEFAULT_REMEMBER_MODE = "session";
+const rememberVaultMode = ref(readRememberVaultPreference());
 
-function readRememberVaultPreference(): boolean {
+const rememberModeOptions = [
+  { label: "仅内存（最安全）", value: "memory" },
+  { label: "会话内记住", value: "session" },
+  { label: "受信任设备（30 天）", value: "trustedDevice" },
+];
+
+function readRememberVaultPreference(): "memory" | "session" | "trustedDevice" {
   try {
     const raw = window.localStorage.getItem(REMEMBER_VAULT_PREF_KEY);
-    if (raw === "0") return false;
-    if (raw === "1") return true;
+    if (raw === "memory" || raw === "session" || raw === "trustedDevice") {
+      return raw;
+    }
   } catch {
     // ignore storage failures
   }
-  return true;
+  return DEFAULT_REMEMBER_MODE;
 }
 
-function persistRememberVaultPreference(enabled: boolean): void {
+function persistRememberVaultPreference(
+  mode: "memory" | "session" | "trustedDevice",
+): void {
   try {
-    window.localStorage.setItem(
-      REMEMBER_VAULT_PREF_KEY,
-      enabled ? "1" : "0",
-    );
+    window.localStorage.setItem(REMEMBER_VAULT_PREF_KEY, mode);
   } catch {
     // ignore storage failures
   }
 }
 
-watch(rememberVaultInSession, (enabled) => {
-  persistRememberVaultPreference(enabled);
+watch(rememberVaultMode, (mode) => {
+  persistRememberVaultPreference(mode);
 });
 
 // 编辑分类模态框
@@ -218,13 +224,14 @@ async function handleSaveSecurity() {
     return;
   }
   await cryptoProvider.setPassword(vaultPasswordInput.value, {
-    rememberInSession: rememberVaultInSession.value,
+    rememberMode: rememberVaultMode.value,
   });
-  message.success(
-    rememberVaultInSession.value
-      ? "保险库密码已设置（本次会话内可自动恢复）"
-      : "保险库密码已设置（仅保留在内存中）",
-  );
+  const modeTip: Record<string, string> = {
+    memory: "仅保留在内存中",
+    session: "本次会话内可自动恢复",
+    trustedDevice: "此设备 30 天内可自动恢复",
+  };
+  message.success(`保险库密码已设置（${modeTip[rememberVaultMode.value]}）`);
   showSecurityModal.value = false;
   vaultPasswordInput.value = "";
 
@@ -606,9 +613,13 @@ function handleRepairShards() {
           show-password-on="click"
           @keydown.enter="handleSaveSecurity"
         />
-        <div class="flex items-center justify-between text-xs">
-          <span>在当前会话内记住密码（建议开启）</span>
-          <NSwitch v-model:value="rememberVaultInSession" size="small" />
+        <div class="space-y-1 text-xs">
+          <span>密码记住策略</span>
+          <NSelect
+            v-model:value="rememberVaultMode"
+            size="small"
+            :options="rememberModeOptions"
+          />
         </div>
       </div>
       <template #action>

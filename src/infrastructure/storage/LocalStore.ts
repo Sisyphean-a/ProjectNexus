@@ -14,6 +14,10 @@ const defaultConfig: NexusConfig = {
   legacyGistId: null,
   schemaVersion: 1,
   tokenVerifiedAt: null,
+  shardStateDigest: {},
+  vaultRememberMode: 'session',
+  vaultAutoLockMinutes: 480,
+  vaultTrustedUntil: null,
   syncInterval: 30,
   theme: 'auto',
 }
