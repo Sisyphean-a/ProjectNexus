@@ -46,6 +46,10 @@ export const useAuthStore = defineStore('auth', () => {
     const verifiedAtSnapshot = tokenVerifiedAt.value
     verificationPromise = (async () => {
       try {
+        const restoreCurrentClientToken = () => {
+          authFacade.syncClientToken(token.value || null)
+        }
+
         if (token.value !== tokenSnapshot) {
           return
         }
@@ -53,7 +57,11 @@ export const useAuthStore = defineStore('auth', () => {
         const snapshot = await authFacade.verifyToken({
           token: tokenSnapshot,
           tokenVerifiedAt: verifiedAtSnapshot,
-        }, force)
+        }, {
+          force,
+          shouldCommit: () => token.value === tokenSnapshot,
+          onStaleResult: restoreCurrentClientToken,
+        })
 
         if (token.value !== tokenSnapshot) {
           return

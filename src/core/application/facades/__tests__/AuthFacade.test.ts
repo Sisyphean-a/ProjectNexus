@@ -73,6 +73,34 @@ describe("AuthFacade", () => {
     );
   });
 
+  it("verifyToken 在最近已校验时跳过远程验证", async () => {
+    const deps = createDeps();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-10T00:00:00.000Z"));
+
+    const facade = new AuthFacade(
+      deps.gistRepository,
+      deps.localStoreRepository,
+    );
+
+    const snapshot = await facade.verifyToken(
+      {
+        token: "token-1",
+        tokenVerifiedAt: "2026-03-10T00:00:00.000Z",
+      },
+      false,
+    );
+
+    expect(snapshot).toEqual({
+      token: "token-1",
+      isAuthenticated: true,
+      tokenStatus: "valid",
+      tokenVerifiedAt: "2026-03-10T00:00:00.000Z",
+    });
+    expect(deps.gistRepository.verifyToken).not.toHaveBeenCalled();
+    expect(deps.localStoreRepository.saveConfig).not.toHaveBeenCalled();
+  });
+
   it("setToken 在校验失败时返回显式错误结果", async () => {
     const deps = createDeps();
     deps.gistRepository.verifyToken.mockResolvedValue(false);
@@ -90,6 +118,38 @@ describe("AuthFacade", () => {
       message: "GitHub Token 无效",
     });
     expect(deps.gistRepository.setAuthToken).toHaveBeenCalledWith(null);
+    expect(deps.localStoreRepository.saveConfig).not.toHaveBeenCalled();
+  });
+
+  it("verifyToken 在结果过期时不会覆盖本地持久化状态", async () => {
+    const deps = createDeps();
+    deps.gistRepository.verifyToken.mockResolvedValue(true);
+    const onStaleResult = vi.fn();
+
+    const facade = new AuthFacade(
+      deps.gistRepository,
+      deps.localStoreRepository,
+    );
+
+    const snapshot = await facade.verifyToken(
+      {
+        token: "token-1",
+        tokenVerifiedAt: null,
+      },
+      {
+        force: false,
+        shouldCommit: () => false,
+        onStaleResult,
+      },
+    );
+
+    expect(snapshot).toEqual({
+      token: "token-1",
+      isAuthenticated: true,
+      tokenStatus: "unknown",
+      tokenVerifiedAt: null,
+    });
+    expect(onStaleResult).toHaveBeenCalledTimes(1);
     expect(deps.localStoreRepository.saveConfig).not.toHaveBeenCalled();
   });
 });

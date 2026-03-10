@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
     verifyToken: vi.fn(),
     setToken: vi.fn(),
     logout: vi.fn(),
+    syncClientToken: vi.fn(),
   },
 }));
 
@@ -76,13 +77,17 @@ describe("useAuthStore", () => {
     expect(mocks.authFacade.verifyToken).toHaveBeenCalledWith({
       token: "token-1",
       tokenVerifiedAt: null,
-    }, false);
+    }, {
+      force: false,
+      shouldCommit: expect.any(Function),
+      onStaleResult: expect.any(Function),
+    });
     expect(store.isAuthenticated).toBe(true);
     expect(store.tokenStatus).toBe("valid");
     expect(store.tokenVerifiedAt).toBe("2026-02-14T00:00:00.000Z");
   });
 
-  it("verifyTokenInBackground 在未过期时跳过远程请求", async () => {
+  it("verifyTokenInBackground 会把当前快照交给 facade 处理", async () => {
     const store = useAuthStore();
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-02-14T00:00:00.000Z"));
@@ -107,7 +112,11 @@ describe("useAuthStore", () => {
     expect(mocks.authFacade.verifyToken).toHaveBeenCalledWith({
       token: "token-1",
       tokenVerifiedAt: "2026-02-14T00:00:00.000Z",
-    }, false);
+    }, {
+      force: false,
+      shouldCommit: expect.any(Function),
+      onStaleResult: expect.any(Function),
+    });
   });
 
   it("setToken 在校验失败时返回 false", async () => {

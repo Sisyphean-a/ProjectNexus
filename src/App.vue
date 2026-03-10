@@ -17,9 +17,40 @@ const appSession = createAppSession({
   workspace: nexusStore,
 })
 
-const showStartupStatus = computed(() => appSession.showStartupStatus.value)
-const startupStatusText = computed(() => appSession.startupStatusText.value)
-const startupStatusClass = computed(() => appSession.startupStatusClass.value)
+const showStartupStatus = computed(() => {
+  if (!authStore.isAuthenticated) {
+    return false
+  }
+
+  return (
+    appSession.startupSyncState.value !== 'idle'
+    || authStore.tokenStatus === 'unknown'
+  )
+})
+
+const startupStatusText = computed(() => {
+  if (appSession.startupSyncState.value === 'failed') {
+    return '后台同步失败，可稍后手动重试'
+  }
+  if (appSession.startupSyncState.value === 'running') {
+    return '正在后台同步远程数据...'
+  }
+  if (appSession.startupSyncState.value === 'scheduled') {
+    return '已加载本地缓存，稍后自动同步...'
+  }
+  if (authStore.tokenStatus === 'unknown') {
+    return '正在后台校验身份凭据...'
+  }
+  return ''
+})
+
+const startupStatusClass = computed(() => {
+  if (appSession.startupSyncState.value === 'failed') {
+    return 'border-amber-300/60 bg-amber-50/95 text-amber-700 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-200'
+  }
+
+  return 'border-slate-200/80 bg-white/95 text-slate-600 dark:border-slate-700/80 dark:bg-slate-900/85 dark:text-slate-300'
+})
 
 onMounted(async () => {
   try {

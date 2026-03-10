@@ -17,6 +17,12 @@ interface AuthGistGateway {
 
 type AuthStoreGateway = Pick<ILocalStore, "getConfig" | "saveConfig">;
 
+interface VerifyTokenOptions {
+  force?: boolean;
+  shouldCommit?: () => boolean;
+  onStaleResult?: () => void;
+}
+
 export const TOKEN_VERIFY_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 export function createSignedOutAuthState(): AuthSessionSnapshot {
@@ -80,18 +86,27 @@ export class AuthFacade {
 
   async verifyToken(
     state: Pick<AuthSessionSnapshot, "token" | "tokenVerifiedAt">,
-    force = false,
+    options: VerifyTokenOptions | boolean = false,
   ): Promise<AuthSessionSnapshot> {
+    const normalizedOptions: VerifyTokenOptions =
+      typeof options === "boolean" ? { force: options } : options;
+
     if (!state.token) {
       this.gistRepository.setAuthToken(null);
       return createSignedOutAuthState();
     }
 
-    if (!this.shouldVerify(state, force)) {
+    if (!this.shouldVerify(state, normalizedOptions.force)) {
       return createVerifiedAuthState(state.token, state.tokenVerifiedAt);
     }
 
     const valid = await this.gistRepository.verifyToken(state.token);
+    const shouldCommit = normalizedOptions.shouldCommit ?? (() => true);
+    if (!shouldCommit()) {
+      normalizedOptions.onStaleResult?.();
+      return createPendingAuthState(state.token, state.tokenVerifiedAt);
+    }
+
     if (!valid) {
       this.gistRepository.setAuthToken(null);
       await this.localStoreRepository.saveConfig({
@@ -141,6 +156,10 @@ export class AuthFacade {
       tokenVerifiedAt: null,
     });
     return createSignedOutAuthState();
+  }
+
+  syncClientToken(token: string | null): void {
+    this.gistRepository.setAuthToken(token);
   }
 
   private shouldVerify(

@@ -67,6 +67,27 @@ describe("createAppSession", () => {
     vi.clearAllMocks();
   });
 
+  it("只暴露会话状态与编排方法，不携带表现层文案映射", () => {
+    const mocks = createMocks(true);
+    const session = createAppSession({
+      theme: mocks.theme,
+      auth: mocks.auth,
+      workspace: mocks.workspace,
+      setTimeoutFn: mocks.setTimeoutFn,
+      clearTimeoutFn: mocks.clearTimeoutFn,
+    });
+
+    expect(session).toMatchObject({
+      startupSyncState: expect.anything(),
+      bootstrap: expect.any(Function),
+      handleAuthChange: expect.any(Function),
+      dispose: expect.any(Function),
+    });
+    expect("showStartupStatus" in session).toBe(false);
+    expect("startupStatusText" in session).toBe(false);
+    expect("startupStatusClass" in session).toBe(false);
+  });
+
   it("bootstrap 会在 theme 和 auth 初始化完成后再初始化 workspace", async () => {
     const mocks = createMocks(true);
     const session = createAppSession({
@@ -145,5 +166,27 @@ describe("createAppSession", () => {
     expect(mocks.order.indexOf("auth.verify")).toBeGreaterThan(
       mocks.order.indexOf("workspace.init"),
     );
+  });
+
+  it("handleAuthChange(false) 和 dispose 会清理已调度的同步定时器", async () => {
+    const mocks = createMocks(true);
+    const session = createAppSession({
+      theme: mocks.theme,
+      auth: mocks.auth,
+      workspace: mocks.workspace,
+      setTimeoutFn: mocks.setTimeoutFn,
+      clearTimeoutFn: mocks.clearTimeoutFn,
+    });
+
+    await session.bootstrap();
+    await session.handleAuthChange(false);
+
+    expect(mocks.clearTimeoutFn).toHaveBeenCalledTimes(1);
+    expect(session.startupSyncState.value).toBe("idle");
+
+    await session.bootstrap();
+    session.dispose();
+
+    expect(mocks.clearTimeoutFn).toHaveBeenCalledTimes(2);
   });
 });
