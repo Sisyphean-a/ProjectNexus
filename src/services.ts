@@ -7,4 +7,5 @@ export {
   localStoreRepository,
   fileRepository,
   localHistoryRepository,
+  authFacade,
 } from "./bootstrap/container";

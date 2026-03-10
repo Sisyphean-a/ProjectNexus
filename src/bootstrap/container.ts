@@ -1,6 +1,7 @@
 import { gistRepository, localStoreRepository, fileRepository, localHistoryRepository } from "../infrastructure";
 import { SyncService } from "../core/application/services/SyncService";
 import { FileService } from "../core/application/services/FileService";
+import { AuthFacade } from "../core/application/facades/AuthFacade";
 import { WebCryptoProvider } from "../infrastructure/security/WebCryptoProvider";
 
 const cryptoProvider = new WebCryptoProvider();
@@ -11,6 +12,7 @@ const syncService = new SyncService(
   cryptoProvider,
 );
 const fileService = new FileService(fileRepository, syncService);
+const authFacade = new AuthFacade(gistRepository, localStoreRepository);
 
 export const appContainer = {
   gistRepository,
@@ -20,6 +22,7 @@ export const appContainer = {
   cryptoProvider,
   syncService,
   fileService,
+  authFacade,
 } as const;
 
 export {
@@ -30,4 +33,5 @@ export {
   localStoreRepository,
   fileRepository,
   localHistoryRepository,
+  authFacade,
 };
