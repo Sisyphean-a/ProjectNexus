@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
-import { useNexusStore } from "../stores/useNexusStore";
 import { NModal, NInput, NScrollbar } from "naive-ui";
 import Fuse from "fuse.js";
+import { useWorkspaceStore } from "../presentation/stores/useWorkspaceStore";
+import { useSelectionStore } from "../presentation/stores/useSelectionStore";
 
 interface SearchItem {
   type: "category" | "file";
@@ -13,44 +14,39 @@ interface SearchItem {
   icon?: string;
 }
 
-const nexusStore = useNexusStore();
+const workspaceStore = useWorkspaceStore();
+const selectionStore = useSelectionStore();
 
 const show = ref(false);
 const searchQuery = ref("");
 const selectedIndex = ref(0);
 const inputRef = ref<InstanceType<typeof NInput> | null>(null);
 
-// 构建搜索列表
 const allItems = computed<SearchItem[]>(() => {
-  if (!nexusStore.index) return [];
+  if (!workspaceStore.index) return [];
 
   const items: SearchItem[] = [];
-
-  for (const cat of nexusStore.index.categories) {
-    // 添加分类
+  for (const category of workspaceStore.index.categories) {
     items.push({
       type: "category",
-      id: cat.id,
-      title: cat.name,
-      icon: cat.icon,
+      id: category.id,
+      title: category.name,
+      icon: category.icon,
     });
 
-    // 添加分类下的文件
-    for (const file of cat.items) {
+    for (const file of category.items) {
       items.push({
         type: "file",
         id: file.id,
-        categoryId: cat.id,
+        categoryId: category.id,
         title: file.title,
-        categoryName: cat.name,
+        categoryName: category.name,
       });
     }
   }
-
   return items;
 });
 
-// Fuse 搜索
 const fuse = computed(
   () =>
     new Fuse(allItems.value, {
@@ -62,69 +58,56 @@ const fuse = computed(
 
 const filteredItems = computed(() => {
   if (!searchQuery.value) return allItems.value.slice(0, 10);
-  return fuse.value
-    .search(searchQuery.value)
-    .slice(0, 10)
-    .map((r: any) => r.item);
+  return fuse.value.search(searchQuery.value).slice(0, 10).map((result) => result.item);
 });
 
-// 重置选择索引
 watch(filteredItems, () => {
   selectedIndex.value = 0;
 });
 
-// 打开搜索
 function openSearch() {
   show.value = true;
   searchQuery.value = "";
   selectedIndex.value = 0;
-  // 聚焦输入框
   setTimeout(() => {
     inputRef.value?.focus();
   }, 100);
 }
 
-// 关闭
 function closeSearch() {
   show.value = false;
 }
 
-// 选择项目
 function selectItem(item: SearchItem) {
   if (item.type === "category") {
-    nexusStore.selectedCategoryId = item.id;
-    nexusStore.selectedFileId = null;
+    selectionStore.selectCategory(item.id);
+    selectionStore.selectFile(null);
   } else {
-    nexusStore.selectedCategoryId = item.categoryId!;
-    nexusStore.selectedFileId = item.id;
+    selectionStore.selectCategory(item.categoryId || null);
+    selectionStore.selectFile(item.id);
   }
   closeSearch();
 }
 
-// 键盘导航
-function handleKeyDown(e: KeyboardEvent) {
-  if (e.key === "ArrowDown") {
-    e.preventDefault();
-    selectedIndex.value = Math.min(
-      selectedIndex.value + 1,
-      filteredItems.value.length - 1,
-    );
-  } else if (e.key === "ArrowUp") {
-    e.preventDefault();
+function handleKeyDown(event: KeyboardEvent) {
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    selectedIndex.value = Math.min(selectedIndex.value + 1, filteredItems.value.length - 1);
+  } else if (event.key === "ArrowUp") {
+    event.preventDefault();
     selectedIndex.value = Math.max(selectedIndex.value - 1, 0);
-  } else if (e.key === "Enter") {
-    e.preventDefault();
+  } else if (event.key === "Enter") {
+    event.preventDefault();
     const item = filteredItems.value[selectedIndex.value];
     if (item) selectItem(item);
-  } else if (e.key === "Escape") {
+  } else if (event.key === "Escape") {
     closeSearch();
   }
 }
 
-// 全局快捷键
-function handleGlobalKeyDown(e: KeyboardEvent) {
-  if ((e.ctrlKey || e.metaKey) && e.key === "p") {
-    e.preventDefault();
+function handleGlobalKeyDown(event: KeyboardEvent) {
+  if ((event.ctrlKey || event.metaKey) && event.key === "p") {
+    event.preventDefault();
     openSearch();
   }
 }
@@ -137,7 +120,6 @@ onUnmounted(() => {
   window.removeEventListener("keydown", handleGlobalKeyDown);
 });
 
-// 暴露方法供外部调用
 defineExpose({ openSearch });
 </script>
 
@@ -154,7 +136,6 @@ defineExpose({ openSearch });
     @keydown="handleKeyDown"
   >
     <div class="space-y-3">
-      <!-- 搜索输入 -->
       <NInput
         ref="inputRef"
         v-model:value="searchQuery"
@@ -163,13 +144,10 @@ defineExpose({ openSearch });
         clearable
       >
         <template #prefix>
-          <div
-            class="i-heroicons-magnifying-glass w-5 h-5 text-slate-400"
-          ></div>
+          <div class="i-heroicons-magnifying-glass w-5 h-5 text-slate-400"></div>
         </template>
       </NInput>
 
-      <!-- 搜索结果 -->
       <NScrollbar style="max-height: 320px">
         <div class="space-y-1">
           <div
@@ -195,9 +173,7 @@ defineExpose({ openSearch });
                 ]"
               ></div>
               <div class="flex-1 min-w-0">
-                <div
-                  class="font-medium truncate text-slate-700 dark:text-slate-200"
-                >
+                <div class="font-medium truncate text-slate-700 dark:text-slate-200">
                   {{ item.title }}
                 </div>
                 <div
@@ -207,9 +183,7 @@ defineExpose({ openSearch });
                   {{ item.categoryName }}
                 </div>
               </div>
-              <div
-                class="text-xs ml-2 text-slate-400 dark:text-slate-500"
-              >
+              <div class="text-xs ml-2 text-slate-400 dark:text-slate-500">
                 {{ item.type === "category" ? "分类" : "配置" }}
               </div>
             </div>
@@ -224,24 +198,14 @@ defineExpose({ openSearch });
         </div>
       </NScrollbar>
 
-      <!-- 快捷键提示 -->
       <div
         class="flex items-center justify-center text-xs pt-2 border-t text-slate-400 border-slate-200 dark:text-slate-500 dark:border-slate-700"
       >
-        <span
-          class="px-1.5 py-0.5 rounded mr-1 bg-slate-200 dark:bg-slate-700"
-          >↑↓</span
-        >
+        <span class="px-1.5 py-0.5 rounded mr-1 bg-slate-200 dark:bg-slate-700">↑↓</span>
         导航
-        <span
-          class="px-1.5 py-0.5 rounded mx-2 bg-slate-200 dark:bg-slate-700"
-          >Enter</span
-        >
+        <span class="px-1.5 py-0.5 rounded mx-2 bg-slate-200 dark:bg-slate-700">Enter</span>
         选择
-        <span
-          class="px-1.5 py-0.5 rounded ml-1 bg-slate-200 dark:bg-slate-700"
-          >Esc</span
-        >
+        <span class="px-1.5 py-0.5 rounded ml-1 bg-slate-200 dark:bg-slate-700">Esc</span>
         关闭
       </div>
     </div>

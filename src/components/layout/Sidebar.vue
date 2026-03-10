@@ -1,633 +1,112 @@
 <script setup lang="ts">
-import { ref, computed, h, watch } from "vue";
-import { useNexusStore } from "../../stores/useNexusStore";
+import { NDropdown, useDialog, useMessage } from "naive-ui";
+import { useSidebarActions } from "./composables/useSidebarActions";
+import SidebarActionsPanel from "./sidebar/SidebarActionsPanel.vue";
+import SidebarCategoryModal from "./sidebar/SidebarCategoryModal.vue";
+import SidebarCategoryTree from "./sidebar/SidebarCategoryTree.vue";
+import SidebarVaultSettingsModal from "./sidebar/SidebarVaultSettingsModal.vue";
+import { useSelectionStore } from "../../presentation/stores/useSelectionStore";
+import { useSyncStore } from "../../presentation/stores/useSyncStore";
+import { useVaultStore } from "../../presentation/stores/useVaultStore";
+import { useWorkspaceStore } from "../../presentation/stores/useWorkspaceStore";
 import { useThemeStore } from "../../stores/useThemeStore";
-import { cryptoProvider } from "../../services";
-import {
-  NMenu,
-  NButton,
-  NIcon,
-  NDropdown,
-  NInput,
-  NModal,
-  NSpace,
-  NSelect,
-  useMessage,
-  useDialog,
-} from "naive-ui";
-import { languageOptions } from "../../constants/languages";
 
-const nexusStore = useNexusStore();
+const workspaceStore = useWorkspaceStore();
+const selectionStore = useSelectionStore();
+const syncStore = useSyncStore();
+const vaultStore = useVaultStore();
 const themeStore = useThemeStore();
 const message = useMessage();
 const dialog = useDialog();
 
-function releaseActiveFocus() {
-  const el = document.activeElement;
-  if (el instanceof HTMLElement) {
-    el.blur();
-  }
-}
-
-// 新建分类模态框
-const showAddModal = ref(false);
-const newCategoryName = ref("");
-const newCategoryDefaultLanguage = ref("yaml");
-const isAdding = ref(false);
-
-// 右键菜单
-const showContextMenu = ref(false);
-const contextMenuX = ref(0);
-const contextMenuY = ref(0);
-const contextMenuCategoryId = ref<string | null>(null);
-
-// Security Modal
-const showSecurityModal = ref(false);
-const vaultPasswordInput = ref("");
-const REMEMBER_VAULT_PREF_KEY = "nexus_vault_remember_mode";
-const DEFAULT_REMEMBER_MODE = "session";
-const rememberVaultMode = ref(readRememberVaultPreference());
-
-const rememberModeOptions = [
-  { label: "仅内存（最安全）", value: "memory" },
-  { label: "会话内记住", value: "session" },
-  { label: "受信任设备（30 天）", value: "trustedDevice" },
-];
-
-function readRememberVaultPreference(): "memory" | "session" | "trustedDevice" {
-  try {
-    const raw = window.localStorage.getItem(REMEMBER_VAULT_PREF_KEY);
-    if (raw === "memory" || raw === "session" || raw === "trustedDevice") {
-      return raw;
-    }
-  } catch {
-    // ignore storage failures
-  }
-  return DEFAULT_REMEMBER_MODE;
-}
-
-function persistRememberVaultPreference(
-  mode: "memory" | "session" | "trustedDevice",
-): void {
-  try {
-    window.localStorage.setItem(REMEMBER_VAULT_PREF_KEY, mode);
-  } catch {
-    // ignore storage failures
-  }
-}
-
-watch(rememberVaultMode, (mode) => {
-  persistRememberVaultPreference(mode);
+const sidebarActions = useSidebarActions({
+  workspaceStore,
+  selectionStore,
+  syncStore,
+  vaultStore,
+  message,
+  dialog,
 });
-
-// 编辑分类模态框
-const showEditModal = ref(false);
-const editCategoryName = ref("");
-const editCategoryDefaultLanguage = ref("yaml");
-const editCategoryId = ref<string | null>(null);
-
-// 图标渲染
-const renderIcon = (iconName: string) => {
-  const iconMap: Record<string, string> = {
-    folder: "i-heroicons-folder",
-    router: "i-heroicons-signal",
-    smart_toy: "i-heroicons-sparkles",
-    code: "i-heroicons-code-bracket",
-    document: "i-heroicons-document-text",
-  };
-  return () =>
-    h("div", { class: `${iconMap[iconName] || "i-heroicons-folder"} w-5 h-5` });
-};
-
-const menuOptions = computed(() => {
-  if (!nexusStore.index) return [];
-  return nexusStore.index.categories.map((cat) => ({
-    label: cat.name,
-    key: cat.id,
-    icon: renderIcon(cat.icon || "folder"),
-  }));
-});
-
-function handleUpdateValue(key: string) {
-  nexusStore.selectedCategoryId = key;
-  nexusStore.selectedFileId = null;
-}
-
-async function handleInitialize() {
-  await nexusStore.initializeGist();
-}
-
-// 新建分类
-async function handleAddCategory() {
-  if (!newCategoryName.value.trim()) {
-    message.warning("请输入分类名称");
-    return;
-  }
-  isAdding.value = true;
-  try {
-    await nexusStore.addCategory(
-      newCategoryName.value.trim(),
-      "folder",
-      newCategoryDefaultLanguage.value,
-    );
-    message.success("分类创建成功");
-    newCategoryName.value = "";
-    newCategoryDefaultLanguage.value = "yaml";
-  } catch (e) {
-    message.error("创建失败");
-  } finally {
-    isAdding.value = false;
-    showAddModal.value = false;
-  }
-}
-
-// 右键菜单
-function handleContextMenu(e: MouseEvent, catId: string) {
-  e.preventDefault();
-  contextMenuCategoryId.value = catId;
-  contextMenuX.value = e.clientX;
-  contextMenuY.value = e.clientY;
-  showContextMenu.value = true;
-}
-
-function handleClickOutside() {
-  showContextMenu.value = false;
-}
-
-const contextMenuOptions = [
-  { label: "编辑分类", key: "rename" },
-  { label: "删除", key: "delete" },
-];
-
-async function handleContextMenuSelect(key: string) {
-  showContextMenu.value = false;
-  const catId = contextMenuCategoryId.value;
-  if (!catId) return;
-
-  if (key === "rename") {
-    const cat = nexusStore.index?.categories.find((c) => c.id === catId);
-    if (cat) {
-      editCategoryId.value = catId;
-      editCategoryName.value = cat.name;
-      editCategoryDefaultLanguage.value = cat.defaultLanguage || "yaml";
-      showEditModal.value = true;
-    }
-  } else if (key === "delete") {
-    const cat = nexusStore.index?.categories.find((c) => c.id === catId);
-    dialog.warning({
-      title: "确认删除",
-      content: `确定要删除分类「${cat?.name}」及其所有配置吗？此操作不可撤销。`,
-      positiveText: "删除",
-      negativeText: "取消",
-      onPositiveClick: () => {
-        const deletingMessage = message.loading("删除分类中...", { duration: 0 });
-        void (async () => {
-          try {
-            const result = await nexusStore.deleteCategory(catId);
-            if (result.failedFiles.length > 0) {
-              message.warning(
-                `分类已删除，但有 ${result.failedFiles.length} 个文件清理失败`,
-              );
-            } else {
-              message.success("已删除");
-            }
-          } catch (e) {
-            message.error("删除失败");
-          } finally {
-            deletingMessage.destroy();
-          }
-        })();
-      },
-    });
-  }
-}
-
-// 编辑分类
-async function handleEditCategory() {
-  if (!editCategoryName.value.trim() || !editCategoryId.value) return;
-  try {
-    await nexusStore.updateCategory(editCategoryId.value, {
-      name: editCategoryName.value.trim(),
-      defaultLanguage: editCategoryDefaultLanguage.value,
-    });
-    message.success("已保存");
-    showEditModal.value = false;
-  } catch (e) {
-    message.error("保存失败");
-  }
-}
-
-// Security
-async function handleSaveSecurity() {
-  if (!vaultPasswordInput.value) {
-    message.warning("密码不能为空");
-    return;
-  }
-  await cryptoProvider.setPassword(vaultPasswordInput.value, {
-    rememberMode: rememberVaultMode.value,
-  });
-  const modeTip: Record<string, string> = {
-    memory: "仅保留在内存中",
-    session: "本次会话内可自动恢复",
-    trustedDevice: "此设备 30 天内可自动恢复",
-  };
-  message.success(`保险库密码已设置（${modeTip[rememberVaultMode.value]}）`);
-  showSecurityModal.value = false;
-  vaultPasswordInput.value = "";
-
-  // 自动重新同步以解密待解密的文件
-  if (nexusStore.index) {
-    try {
-      // 1. 清理本地加密缓存 (删除未修改的明文副本)
-      await nexusStore.resetSecureCache();
-
-      // 2. 强制同步 (忽略时间戳，重新拉取并尝试解密)
-      await nexusStore.sync(true);
-
-      message.success("缓存已刷新，文件已重新验证");
-    } catch (e) {
-      console.error("Auto sync after password set failed", e);
-    }
-  }
-}
-
-// 同步
-const isSyncing = ref(false);
-async function handleSync() {
-  isSyncing.value = true;
-  try {
-    await nexusStore.sync();
-    message.success("同步完成");
-  } catch (e) {
-    message.error("同步失败");
-  } finally {
-    isSyncing.value = false;
-  }
-}
-
-const isForcePulling = ref(false);
-
-function handleForcePull() {
-  releaseActiveFocus();
-  dialog.warning({
-    title: "强制拉取覆盖",
-    content:
-      "此操作会删除本地全部文档缓存与历史记录，并以远程版本完整覆盖本地。未同步的本地改动将永久丢失。确认继续吗？",
-    positiveText: "删除本地并拉取",
-    negativeText: "取消",
-    onPositiveClick: () => {
-      isForcePulling.value = true;
-      const forcingMessage = message.loading("正在强制拉取远程数据...", {
-        duration: 0,
-      });
-      void (async () => {
-        try {
-          await nexusStore.forcePullFromRemote();
-          message.success("强制拉取完成，已采用远程数据");
-        } catch (e) {
-          console.error("Force pull failed", e);
-          const detail = e instanceof Error ? e.message : "未知错误";
-          message.error(`强制拉取失败：${detail}`);
-        } finally {
-          forcingMessage.destroy();
-          isForcePulling.value = false;
-        }
-      })();
-    },
-  });
-}
-
-const isRepairing = ref(false);
-const isSyncBusy = computed(
-  () =>
-    nexusStore.isLoading || isSyncing.value || isRepairing.value || isForcePulling.value,
-);
-
-function formatRepairSummary(result: {
-  rawShardCount: number;
-  dedupedShardCount: number;
-  duplicateRowsMerged: number;
-  manifestsLoaded: number;
-  repairedShardCount: number;
-  removedEmptyShards: number;
-  sweptUnreferencedShardGists: number;
-  deletedLegacyGistId?: string;
-}) {
-  const lines = [
-    `原始分片数: ${result.rawShardCount}`,
-    `去重后分片数: ${result.dedupedShardCount}`,
-    `合并重复行: ${result.duplicateRowsMerged}`,
-    `读取 manifest 数: ${result.manifestsLoaded}`,
-    `修复后分片数: ${result.repairedShardCount}`,
-    `移除空分片: ${result.removedEmptyShards}`,
-    `清理旧分片 gist: ${result.sweptUnreferencedShardGists}`,
-  ];
-
-  if (result.deletedLegacyGistId) {
-    lines.push(`已删除 legacy gist: ${result.deletedLegacyGistId}`);
-  }
-
-  return lines.join("\n");
-}
-
-function handleRepairShards() {
-  if (!nexusStore.index || !nexusStore.currentGistId) {
-    message.warning("当前没有可修复的分片数据");
-    return;
-  }
-
-  releaseActiveFocus();
-  dialog.warning({
-    title: "修复并清理旧存储",
-    content:
-      "将执行分片去重、统计重算、README/描述重写，并删除未被当前项目引用的旧 shard gist。继续吗？",
-    positiveText: "开始修复",
-    negativeText: "取消",
-    onPositiveClick: () => {
-      isRepairing.value = true;
-      const repairingMessage = message.loading("分片修复中...", { duration: 0 });
-      void (async () => {
-        try {
-          const result = await nexusStore.repairShards({
-            apply: true,
-            rewriteReadme: true,
-            rewriteDescription: true,
-            dropEmptyShards: true,
-            deleteOrphanGists: true,
-            sweepUnreferencedShardGists: true,
-            legacyGistIdToDelete: nexusStore.config?.legacyGistId || null,
-          });
-
-          message.success("分片修复完成");
-          // Wait one tick after warning dialog closes to avoid focus/aria-hidden contention.
-          setTimeout(() => {
-            releaseActiveFocus();
-            dialog.info({
-              title: "修复结果",
-              content: formatRepairSummary(result),
-            });
-          }, 0);
-        } catch (e) {
-          console.error("Repair shards failed", e);
-          message.error("分片修复失败");
-        } finally {
-          repairingMessage.destroy();
-          isRepairing.value = false;
-        }
-      })();
-    },
-  });
-}
 </script>
 
 <template>
   <div class="h-full flex flex-col">
-    <div
-      class="p-4 flex items-center space-x-2 border-b transition-colors duration-200"
-      :class="themeStore.isDark ? 'border-slate-700' : 'border-slate-200'"
-    >
+    <div class="p-4 flex items-center space-x-2 border-b transition-colors duration-200" :class="themeStore.isDark ? 'border-slate-700' : 'border-slate-200'">
       <div class="i-heroicons-cube-transparent w-6 h-6 text-blue-500"></div>
-      <span
-        class="font-bold text-lg tracking-wide"
-        :class="themeStore.isDark ? 'text-white' : 'text-slate-800'"
-        >NEXUS</span
-      >
+      <span class="font-bold text-lg tracking-wide" :class="themeStore.isDark ? 'text-white' : 'text-slate-800'">NEXUS</span>
     </div>
 
-    <div class="flex-1 overflow-y-auto py-2">
-      <div
-        v-if="!nexusStore.index && !nexusStore.isLoading"
-        class="p-4 text-center"
-      >
-        <p class="text-sm text-slate-400 mb-4">未找到配置</p>
-        <NButton type="primary" size="small" @click="handleInitialize">
-          初始化仓库
-        </NButton>
-      </div>
+    <SidebarCategoryTree
+      v-if="workspaceStore.index"
+      :categories="workspaceStore.index.categories"
+      :selected-category-id="selectionStore.selectedCategoryId"
+      :is-dark="themeStore.isDark"
+      @select-category="sidebarActions.selectCategory"
+      @open-context-menu="sidebarActions.openContextMenu"
+    />
 
-      <template v-else>
-        <!-- 自定义菜单以支持右键 -->
-        <div
-          v-for="cat in nexusStore.index?.categories"
-          :key="cat.id"
-          class="px-2 py-1"
-        >
-          <div
-            class="flex items-center px-3 py-2 rounded-md cursor-pointer transition-all duration-200"
-            :class="[
-              nexusStore.selectedCategoryId === cat.id
-                ? 'bg-blue-500/20 text-blue-500'
-                : themeStore.isDark
-                  ? 'hover:bg-slate-800 text-slate-300'
-                  : 'hover:bg-slate-100 text-slate-600',
-            ]"
-            @click="handleUpdateValue(cat.id)"
-            @contextmenu="handleContextMenu($event, cat.id)"
-          >
-            <component :is="renderIcon(cat.icon || 'folder')" />
-            <span class="ml-3 truncate">{{ cat.name }}</span>
-          </div>
-        </div>
-      </template>
-    </div>
+    <SidebarActionsPanel
+      :has-index="!!workspaceStore.index"
+      :is-loading="workspaceStore.isLoading"
+      :is-dark="themeStore.isDark"
+      :is-sync-busy="sidebarActions.isSyncBusy.value"
+      :is-syncing="sidebarActions.isSyncing.value"
+      :is-force-pulling="sidebarActions.isForcePulling.value"
+      :is-repairing="sidebarActions.isRepairing.value"
+      :api-rate-limit="syncStore.apiRateLimit"
+      @initialize="sidebarActions.handleInitialize"
+      @show-add-modal="sidebarActions.showAddModal.value = true"
+      @show-security-modal="sidebarActions.showSecurityModal.value = true"
+      @repair-shards="sidebarActions.handleRepairShards"
+      @sync="sidebarActions.handleSync"
+      @force-pull="sidebarActions.handleForcePull"
+    />
 
-    <!-- 底部工具栏 -->
-    <div
-      class="p-3 border-t space-y-2 transition-colors duration-200"
-      :class="themeStore.isDark ? 'border-slate-700' : 'border-slate-200'"
-    >
-      <NButton
-        block
-        size="small"
-        type="primary"
-        ghost
-        @click="showAddModal = true"
-        :disabled="!nexusStore.index"
-      >
-        <template #icon>
-          <div class="i-heroicons-plus w-4 h-4"></div>
-        </template>
-        新建分类
-      </NButton>
-
-      <div class="flex gap-2">
-        <NButton
-          block
-          size="small"
-          :quaternary="themeStore.isDark"
-          :tertiary="!themeStore.isDark"
-          @click="showSecurityModal = true"
-        >
-          <template #icon>
-            <div class="i-heroicons-shield-check w-4 h-4"></div>
-          </template>
-          设置密码
-        </NButton>
-      </div>
-
-      <NButton
-        block
-        size="small"
-        :quaternary="themeStore.isDark"
-        :tertiary="!themeStore.isDark"
-        :loading="isRepairing"
-        :disabled="!nexusStore.index"
-        @click="handleRepairShards"
-      >
-        <template #icon>
-          <div class="i-heroicons-wrench-screwdriver w-4 h-4"></div>
-        </template>
-        修复分片
-      </NButton>
-
-      <div
-        class="flex items-center justify-between text-xs"
-        :class="themeStore.isDark ? 'text-slate-500' : 'text-slate-400'"
-      >
-        <span>{{ isSyncBusy ? "同步中..." : "已同步" }}</span>
-        <div class="flex items-center gap-1">
-          <NButton
-            text
-            size="tiny"
-            :loading="isSyncing"
-            :disabled="isSyncBusy && !isSyncing"
-            @click="handleSync"
-            title="常规同步"
-          >
-            <template #icon>
-              <div class="i-heroicons-arrow-path w-4 h-4"></div>
-            </template>
-          </NButton>
-          <NButton
-            text
-            size="tiny"
-            type="error"
-            :loading="isForcePulling"
-            :disabled="isSyncBusy && !isForcePulling"
-            @click="handleForcePull"
-            title="强制拉取覆盖（删除本地数据并采用远程）"
-          >
-            <template #icon>
-              <div class="i-heroicons-arrow-down-tray w-4 h-4"></div>
-            </template>
-          </NButton>
-        </div>
-      </div>
-
-      <!-- API Rate Limit -->
-      <div
-        v-if="nexusStore.apiRateLimit?.limit > 0"
-        class="flex items-center justify-between text-xs pt-1 border-t border-dashed"
-        :class="[
-          themeStore.isDark
-            ? 'text-slate-500 border-slate-700'
-            : 'text-slate-400 border-slate-200',
-          nexusStore.apiRateLimit.remaining < 100
-            ? 'text-red-500 font-bold'
-            : '',
-        ]"
-        :title="`重置时间: ${new Date(nexusStore.apiRateLimit.resetAt).toLocaleTimeString()}`"
-      >
-        <span>API 配额</span>
-        <span
-          >{{ nexusStore.apiRateLimit.remaining }}/{{
-            nexusStore.apiRateLimit.limit
-          }}</span
-        >
-      </div>
-    </div>
-
-    <!-- 右键菜单 -->
     <NDropdown
       placement="bottom-start"
       trigger="manual"
-      :x="contextMenuX"
-      :y="contextMenuY"
-      :options="contextMenuOptions"
-      :show="showContextMenu"
-      @select="handleContextMenuSelect"
-      @clickoutside="handleClickOutside"
+      :x="sidebarActions.contextMenuX.value"
+      :y="sidebarActions.contextMenuY.value"
+      :options="sidebarActions.contextMenuOptions"
+      :show="sidebarActions.showContextMenu.value"
+      @select="sidebarActions.handleContextMenuSelect"
+      @clickoutside="sidebarActions.closeContextMenu"
     />
 
-    <!-- 新建分类模态框 -->
-    <NModal v-model:show="showAddModal" preset="dialog" title="新建分类">
-      <div class="space-y-4">
-        <NInput
-          v-model:value="newCategoryName"
-          placeholder="输入分类名称"
-          @keydown.enter="handleAddCategory"
-        />
-        <NSelect
-          v-model:value="newCategoryDefaultLanguage"
-          :options="languageOptions"
-          placeholder="选择默认语言"
-        />
-      </div>
-      <template #action>
-        <NSpace>
-          <NButton @click="showAddModal = false">取消</NButton>
-          <NButton type="primary" :loading="isAdding" @click="handleAddCategory"
-            >创建</NButton
-          >
-        </NSpace>
-      </template>
-    </NModal>
+    <SidebarCategoryModal
+      :show="sidebarActions.showAddModal.value"
+      title="新建分类"
+      :name="sidebarActions.newCategoryName.value"
+      :default-language="sidebarActions.newCategoryDefaultLanguage.value"
+      confirm-text="创建"
+      :is-loading="sidebarActions.isAdding.value"
+      @update:show="sidebarActions.showAddModal.value = $event"
+      @update:name="sidebarActions.newCategoryName.value = $event"
+      @update:default-language="sidebarActions.newCategoryDefaultLanguage.value = $event"
+      @confirm="sidebarActions.handleAddCategory"
+    />
 
-    <!-- 编辑分类模态框 -->
-    <NModal v-model:show="showEditModal" preset="dialog" title="编辑分类">
-      <div class="space-y-4">
-        <NInput
-          v-model:value="editCategoryName"
-          placeholder="输入分类名称"
-          @keydown.enter="handleEditCategory"
-        />
-        <NSelect
-          v-model:value="editCategoryDefaultLanguage"
-          :options="languageOptions"
-          placeholder="选择默认语言"
-        />
-      </div>
-      <template #action>
-        <NSpace>
-          <NButton @click="showEditModal = false">取消</NButton>
-          <NButton type="primary" @click="handleEditCategory">保存</NButton>
-        </NSpace>
-      </template>
-    </NModal>
+    <SidebarCategoryModal
+      :show="sidebarActions.showEditModal.value"
+      title="编辑分类"
+      :name="sidebarActions.editCategoryName.value"
+      :default-language="sidebarActions.editCategoryDefaultLanguage.value"
+      confirm-text="保存"
+      @update:show="sidebarActions.showEditModal.value = $event"
+      @update:name="sidebarActions.editCategoryName.value = $event"
+      @update:default-language="sidebarActions.editCategoryDefaultLanguage.value = $event"
+      @confirm="sidebarActions.handleEditCategory"
+    />
 
-    <!-- 安全设置模态框 -->
-    <NModal
-      v-model:show="showSecurityModal"
-      preset="dialog"
-      title="设置保险库密码"
-    >
-      <div class="space-y-4">
-        <p class="text-xs text-gray-500">
-          此密码用于加密/解密标记为“安全”的文件。默认仅保留在当前运行内存，
-          不写入本地持久化存储。
-        </p>
-        <NInput
-          v-model:value="vaultPasswordInput"
-          type="password"
-          placeholder="输入新的保险库密码"
-          show-password-on="click"
-          @keydown.enter="handleSaveSecurity"
-        />
-        <div class="space-y-1 text-xs">
-          <span>密码记住策略</span>
-          <NSelect
-            v-model:value="rememberVaultMode"
-            size="small"
-            :options="rememberModeOptions"
-          />
-        </div>
-      </div>
-      <template #action>
-        <NSpace>
-          <NButton @click="showSecurityModal = false">取消</NButton>
-          <NButton type="primary" @click="handleSaveSecurity">保存</NButton>
-        </NSpace>
-      </template>
-    </NModal>
+    <SidebarVaultSettingsModal
+      :show="sidebarActions.showSecurityModal.value"
+      :password="sidebarActions.vaultPasswordInput.value"
+      :remember-mode="sidebarActions.rememberVaultMode.value"
+      :remember-mode-options="sidebarActions.rememberModeOptions"
+      @update:show="sidebarActions.showSecurityModal.value = $event"
+      @update:password="sidebarActions.vaultPasswordInput.value = $event"
+      @update:remember-mode="sidebarActions.rememberVaultMode.value = $event"
+      @save="sidebarActions.handleSaveSecurity"
+    />
   </div>
 </template>

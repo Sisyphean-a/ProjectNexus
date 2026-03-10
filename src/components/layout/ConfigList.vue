@@ -1,10 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch } from "vue";
-import { useNexusStore } from "../../stores/useNexusStore";
-import { useThemeStore } from "../../stores/useThemeStore";
 import {
-  NList,
-  NListItem,
   NEmpty,
   NInput,
   NButton,
@@ -18,37 +14,33 @@ import {
 import Fuse from "fuse.js";
 import type { GistIndexItem } from "../../core/domain/entities/types";
 import { languageOptions } from "../../constants/languages";
+import { useThemeStore } from "../../stores/useThemeStore";
+import { useWorkspaceStore } from "../../presentation/stores/useWorkspaceStore";
+import { useSelectionStore } from "../../presentation/stores/useSelectionStore";
 
-const nexusStore = useNexusStore();
+const workspaceStore = useWorkspaceStore();
+const selectionStore = useSelectionStore();
 const themeStore = useThemeStore();
 const message = useMessage();
 const dialog = useDialog();
 
 const searchQuery = ref("");
-
-// 新建文件模态框
 const showAddModal = ref(false);
 const newFileName = ref("");
 const newFileLanguage = ref("yaml");
 const isAdding = ref(false);
-
-// 右键菜单
 const showContextMenu = ref(false);
 const contextMenuX = ref(0);
 const contextMenuY = ref(0);
 const contextMenuFileId = ref<string | null>(null);
-
-// 重命名模态框
 const showRenameModal = ref(false);
 const renameFileName = ref("");
 const renameFileId = ref<string | null>(null);
-
-// 删除中间态
 const deletingFileId = ref<string | null>(null);
 
 const fuse = computed(
   () =>
-    new Fuse<GistIndexItem>(nexusStore.currentFileList, {
+    new Fuse<GistIndexItem>(workspaceStore.currentFileList, {
       keys: ["title", { name: "tags", weight: 0.7 }],
       threshold: 0.3,
       ignoreLocation: true,
@@ -56,37 +48,35 @@ const fuse = computed(
 );
 
 const filteredList = computed(() => {
-  const list = nexusStore.currentFileList;
+  const list = workspaceStore.currentFileList;
   if (!searchQuery.value) return list;
   return fuse.value.search(searchQuery.value).map((result) => result.item);
 });
 
-// 监听模态框打开,使用分类默认语言
-watch(showAddModal, (newVal) => {
-  if (newVal) {
-    const category = nexusStore.currentCategory;
-    newFileLanguage.value = category?.defaultLanguage || "yaml";
+watch(showAddModal, (visible) => {
+  if (!visible) {
+    return;
   }
+  newFileLanguage.value = workspaceStore.currentCategory?.defaultLanguage || "yaml";
 });
 
 function handleSelect(id: string) {
-  nexusStore.selectedFileId = id;
+  selectionStore.selectFile(id);
 }
 
-// 新建文件
 async function handleAddFile() {
   if (!newFileName.value.trim()) {
     message.warning("请输入文件名");
     return;
   }
-  if (!nexusStore.selectedCategoryId) {
+  if (!selectionStore.selectedCategoryId) {
     message.warning("请先选择一个分类");
     return;
   }
   isAdding.value = true;
   try {
-    await nexusStore.addFile(
-      nexusStore.selectedCategoryId,
+    await workspaceStore.addFile(
+      selectionStore.selectedCategoryId,
       newFileName.value.trim(),
       newFileLanguage.value,
     );
@@ -94,19 +84,18 @@ async function handleAddFile() {
     showAddModal.value = false;
     newFileName.value = "";
     newFileLanguage.value = "yaml";
-  } catch (e) {
+  } catch {
     message.error("创建失败");
   } finally {
     isAdding.value = false;
   }
 }
 
-// 右键菜单
-function handleContextMenu(e: MouseEvent, fileId: string) {
-  e.preventDefault();
+function handleContextMenu(event: MouseEvent, fileId: string) {
+  event.preventDefault();
   contextMenuFileId.value = fileId;
-  contextMenuX.value = e.clientX;
-  contextMenuY.value = e.clientY;
+  contextMenuX.value = event.clientX;
+  contextMenuY.value = event.clientY;
   showContextMenu.value = true;
 }
 
@@ -122,52 +111,52 @@ const contextMenuOptions = [
 async function handleContextMenuSelect(key: string) {
   showContextMenu.value = false;
   const fileId = contextMenuFileId.value;
-  if (!fileId || !nexusStore.selectedCategoryId) return;
+  if (!fileId || !selectionStore.selectedCategoryId) return;
 
   if (key === "rename") {
-    const file = nexusStore.currentFileList.find((f) => f.id === fileId);
-    if (file) {
-      renameFileId.value = fileId;
-      renameFileName.value = file.title;
-      showRenameModal.value = true;
+    const file = workspaceStore.currentFileList.find((item) => item.id === fileId);
+    if (!file) {
+      return;
     }
-  } else if (key === "delete") {
-    const file = nexusStore.currentFileList.find((f) => f.id === fileId);
-    dialog.warning({
-      title: "确认删除",
-      content: `确定要删除配置「${file?.title}」吗？此操作不可撤销。`,
-      positiveText: "删除",
-      negativeText: "取消",
-      onPositiveClick: () => {
-        // 设置删除中状态
-        deletingFileId.value = fileId;
-        const deletingMessage = message.loading("删除中...", { duration: 0 });
-        void (async () => {
-          try {
-            await nexusStore.deleteFile(nexusStore.selectedCategoryId!, fileId);
-            message.success("已删除");
-          } catch (e) {
-            message.error("删除失败");
-          } finally {
-            deletingMessage.destroy();
-            deletingFileId.value = null;
-          }
-        })();
-      },
-    });
+    renameFileId.value = fileId;
+    renameFileName.value = file.title;
+    showRenameModal.value = true;
+    return;
   }
+
+  const file = workspaceStore.currentFileList.find((item) => item.id === fileId);
+  dialog.warning({
+    title: "确认删除",
+    content: `确定要删除配置「${file?.title}」吗？此操作不可撤销。`,
+    positiveText: "删除",
+    negativeText: "取消",
+    onPositiveClick: () => {
+      deletingFileId.value = fileId;
+      const deletingMessage = message.loading("删除中...", { duration: 0 });
+      void (async () => {
+        try {
+          await workspaceStore.deleteFile(selectionStore.selectedCategoryId!, fileId);
+          message.success("已删除");
+        } catch {
+          message.error("删除失败");
+        } finally {
+          deletingMessage.destroy();
+          deletingFileId.value = null;
+        }
+      })();
+    },
+  });
 }
 
-// 重命名
 async function handleRenameFile() {
   if (!renameFileName.value.trim() || !renameFileId.value) return;
   try {
-    await nexusStore.updateFile(renameFileId.value, {
+    await workspaceStore.updateFile(renameFileId.value, {
       title: renameFileName.value.trim(),
     });
     message.success("已重命名");
     showRenameModal.value = false;
-  } catch (e) {
+  } catch {
     message.error("重命名失败");
   }
 }
@@ -178,7 +167,6 @@ async function handleRenameFile() {
     class="h-full flex flex-col transition-colors duration-200"
     :class="themeStore.isDark ? 'bg-slate-800/50' : 'bg-slate-50'"
   >
-    <!-- 搜索头部 -->
     <div
       class="p-4 border-b transition-colors duration-200"
       :class="themeStore.isDark ? 'border-slate-700/50' : 'border-slate-200'"
@@ -191,28 +179,21 @@ async function handleRenameFile() {
         :class="themeStore.isDark ? 'bg-slate-900 border-none' : ''"
       >
         <template #prefix>
-          <div
-            class="i-heroicons-magnifying-glass w-4 h-4 text-slate-500"
-          ></div>
+          <div class="i-heroicons-magnifying-glass w-4 h-4 text-slate-500"></div>
         </template>
       </NInput>
     </div>
 
-    <!-- 列表 -->
     <div class="flex-1 overflow-y-auto">
       <div
-        v-if="!nexusStore.selectedCategoryId"
+        v-if="!selectionStore.selectedCategoryId"
         class="p-8 text-center text-sm"
         :class="themeStore.isDark ? 'text-slate-500' : 'text-slate-400'"
       >
         请选择一个分类
       </div>
 
-      <NEmpty
-        v-else-if="filteredList.length === 0"
-        description="暂无内容"
-        class="mt-10"
-      />
+      <NEmpty v-else-if="filteredList.length === 0" description="暂无内容" class="mt-10" />
 
       <div v-else class="py-2">
         <div
@@ -222,7 +203,7 @@ async function handleRenameFile() {
           :class="[
             deletingFileId === item.id
               ? 'opacity-40 pointer-events-none scale-95'
-              : nexusStore.selectedFileId === item.id
+              : selectionStore.selectedFileId === item.id
                 ? 'bg-blue-500/20 border-l-2 border-blue-500'
                 : themeStore.isDark
                   ? 'hover:bg-slate-700/50'
@@ -231,18 +212,13 @@ async function handleRenameFile() {
           @click="handleSelect(item.id)"
           @contextmenu="handleContextMenu($event, item.id)"
         >
-          <!-- 删除中加载指示 -->
           <div
             v-if="deletingFileId === item.id"
             class="absolute inset-0 flex items-center justify-center"
           >
             <div class="i-heroicons-arrow-path animate-spin w-5 h-5 text-red-400"></div>
           </div>
-          
-          <div
-            class="font-medium"
-            :class="themeStore.isDark ? 'text-slate-200' : 'text-slate-700'"
-          >
+          <div class="font-medium" :class="themeStore.isDark ? 'text-slate-200' : 'text-slate-700'">
             {{ item.title }}
           </div>
           <div
@@ -253,11 +229,7 @@ async function handleRenameFile() {
               v-for="tag in item.tags"
               :key="tag"
               class="text-xs px-1.5 py-0.5 rounded"
-              :class="
-                themeStore.isDark
-                  ? 'bg-slate-700 text-slate-400'
-                  : 'bg-slate-200 text-slate-500'
-              "
+              :class="themeStore.isDark ? 'bg-slate-700 text-slate-400' : 'bg-slate-200 text-slate-500'"
             >
               {{ tag }}
             </span>
@@ -266,7 +238,6 @@ async function handleRenameFile() {
       </div>
     </div>
 
-    <!-- 底部新建按钮 -->
     <div
       class="p-3 border-t transition-colors duration-200"
       :class="themeStore.isDark ? 'border-slate-700/50' : 'border-slate-200'"
@@ -275,7 +246,7 @@ async function handleRenameFile() {
         block
         size="small"
         dashed
-        :disabled="!nexusStore.selectedCategoryId"
+        :disabled="!selectionStore.selectedCategoryId"
         @click="showAddModal = true"
       >
         <template #icon>
@@ -285,7 +256,6 @@ async function handleRenameFile() {
       </NButton>
     </div>
 
-    <!-- 右键菜单 -->
     <NDropdown
       placement="bottom-start"
       trigger="manual"
@@ -297,7 +267,6 @@ async function handleRenameFile() {
       @clickoutside="handleClickOutside"
     />
 
-    <!-- 新建文件模态框 -->
     <NModal v-model:show="showAddModal" preset="dialog" title="新建配置">
       <div class="space-y-4">
         <NInput
@@ -314,14 +283,11 @@ async function handleRenameFile() {
       <template #action>
         <NSpace>
           <NButton @click="showAddModal = false">取消</NButton>
-          <NButton type="primary" :loading="isAdding" @click="handleAddFile"
-            >创建</NButton
-          >
+          <NButton type="primary" :loading="isAdding" @click="handleAddFile">创建</NButton>
         </NSpace>
       </template>
     </NModal>
 
-    <!-- 重命名模态框 -->
     <NModal v-model:show="showRenameModal" preset="dialog" title="重命名配置">
       <NInput
         v-model:value="renameFileName"

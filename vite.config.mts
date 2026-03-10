@@ -205,11 +205,12 @@ export default defineConfig(({ command }) => ({
         "../tests/factories/**",
       ],
       thresholds: {
-        lines: 25,
-        functions: 55,
-        branches: 55,
-        statements: 25,
+        lines: 35,
+        functions: 60,
+        branches: 60,
+        statements: 35,
       },
     },
   },
 }));
+

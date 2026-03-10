@@ -1,99 +1,117 @@
+import type { IFileRepository } from "../ports/IFileRepository";
 import type { IGistRepository } from "../ports/IGistRepository";
 import type { ILocalStore } from "../ports/ILocalStore";
-import type { IFileRepository } from "../ports/IFileRepository";
+import type { ICryptoProvider } from "../ports/ICryptoProvider";
 import type {
   GistIndexItem,
   NexusConfig,
   NexusFileStorage,
   NexusIndex,
   ShardDescriptor,
-  ShardManifest,
-  ShardManifestItem,
 } from "../../domain/entities/types";
 import { NexusFile } from "../../domain/entities/NexusFile";
-import { calculateChecksum } from "../../domain/shared/Hash";
-import type { ICryptoProvider } from "../ports/ICryptoProvider";
 import { ShardManifestService } from "./ShardManifestService";
+import { ConflictGuard } from "./sync/ConflictGuard";
+import { LegacyMigrationService } from "./sync/LegacyMigrationService";
+import { RemoteFileSyncService } from "./sync/RemoteFileSyncService";
+import { ShardAllocationService } from "./sync/ShardAllocationService";
+import { ShardFetchPlanner } from "./sync/ShardFetchPlanner";
+import { ShardPullService } from "./sync/ShardPullService";
+import { ShardRepairService } from "./sync/ShardRepairService";
+import { ShardStateService } from "./sync/ShardStateService";
+import { SyncDownCoordinator } from "./sync/SyncDownCoordinator";
+import {
+  NEXUS_INDEX_FILENAME,
+  NEXUS_INDEX_V2_FILENAME,
+  NEXUS_SHARDS_FILENAME,
+} from "./sync/SyncConstants";
+import type {
+  RepairShardsOptions,
+  RepairShardsResult,
+  SyncDownResult,
+} from "./sync/SyncTypes";
 
-export const DECRYPTION_PENDING_PREFIX = "__NEXUS_DECRYPT_PENDING__";
+export { DECRYPTION_PENDING_PREFIX } from "./sync/SyncConstants";
+export type { RepairShardsOptions, RepairShardsResult } from "./sync/SyncTypes";
 
-const NEXUS_INDEX_FILENAME = "nexus_index.json";
-const NEXUS_INDEX_V2_FILENAME = "nexus_index_v2.json";
-const NEXUS_SHARDS_FILENAME = "nexus_shards.json";
-const NEXUS_SHARD_STATE_FILENAME = "nexus_shard_state.json";
-const SHARD_MANIFEST_FILENAME = "shard_manifest.json";
-
-const SHARD_TARGET_BYTES = 3 * 1024 * 1024;
-const SHARD_HARD_BYTES = 8 * 1024 * 1024;
-const SHARD_FILE_LIMIT = 120;
-const LARGE_FILE_BYTES = 512 * 1024;
-
-interface SyncDownResult {
-  index: NexusIndex | null;
-  synced: boolean;
-  gistUpdatedAt?: string;
-  configUpdates?: Partial<NexusConfig>;
-}
-
-interface IndexedItem {
-  categoryId: string;
-  item: GistIndexItem;
-}
-
-interface ShardFetchPlan {
-  [gistId: string]: Set<string>;
-}
-
-interface ShardStateItem {
-  shardId: string;
-  gistId: string;
-  manifestHash: string;
-  updated_at: string;
-  fileCount: number;
-  totalBytes: number;
-}
-
-interface ShardStateIndex {
-  version: 1;
-  updated_at: string;
-  shards: ShardStateItem[];
-}
-
-export interface RepairShardsOptions {
-  apply?: boolean;
-  rewriteReadme?: boolean;
-  rewriteDescription?: boolean;
-  dropEmptyShards?: boolean;
-  deleteOrphanGists?: boolean;
-  sweepUnreferencedShardGists?: boolean;
-  legacyGistIdToDelete?: string | null;
-}
-
-export interface RepairShardsResult {
-  applied: boolean;
-  rawShardCount: number;
-  dedupedShardCount: number;
-  duplicateRowsMerged: number;
-  manifestsLoaded: number;
-  repairedShardCount: number;
-  removedEmptyShards: number;
-  removedShardGists: string[];
-  sweptUnreferencedShardGists: number;
-  sweptShardGistIds: string[];
-  deletedLegacyGistId?: string;
-  rootUpdatedAt?: string;
-}
+type RootResolution = {
+  rootGistId: string;
+  rootMeta: { updated_at: string };
+};
 
 export class SyncService {
-  private shardManifestService: ShardManifestService;
+  private readonly shardManifestService: ShardManifestService;
+  private readonly conflictGuard: ConflictGuard;
+  private readonly shardStateService: ShardStateService;
+  private readonly shardPullService: ShardPullService;
+  private readonly shardRepairService: ShardRepairService;
+  private readonly legacyMigrationService: LegacyMigrationService;
+  private readonly shardAllocationService: ShardAllocationService;
+  private readonly remoteFileSyncService: RemoteFileSyncService;
+  private readonly syncDownCoordinator: SyncDownCoordinator;
 
   constructor(
-    private gistRepo: IGistRepository,
-    private localStore: ILocalStore,
-    private fileRepo: IFileRepository,
-    private cryptoProvider: ICryptoProvider,
+    private readonly gistRepo: IGistRepository,
+    private readonly localStore: ILocalStore,
+    fileRepo: IFileRepository,
+    cryptoProvider: ICryptoProvider,
   ) {
-    this.shardManifestService = new ShardManifestService(this.gistRepo);
+    this.conflictGuard = new ConflictGuard(gistRepo);
+    this.shardStateService = new ShardStateService(gistRepo);
+
+    this.shardManifestService = new ShardManifestService(gistRepo);
+    const shardFetchPlanner = new ShardFetchPlanner(gistRepo);
+
+    this.shardAllocationService = new ShardAllocationService({ gistRepo });
+    this.remoteFileSyncService = new RemoteFileSyncService({
+      gistRepo,
+      fileRepo,
+      cryptoProvider,
+      shardManifestService: this.shardManifestService,
+      shardStateService: this.shardStateService,
+    });
+    this.shardPullService = new ShardPullService({
+      gistRepo,
+      fileRepo,
+      cryptoProvider,
+      shardFetchPlanner,
+    });
+    this.shardRepairService = new ShardRepairService({
+      gistRepo,
+      localStore,
+    });
+    this.legacyMigrationService = new LegacyMigrationService({
+      gistRepo,
+      localStore,
+      cryptoProvider,
+      shardStateService: this.shardStateService,
+      assignStorageForItem: ({ index, categoryId, item, rawContent }) =>
+        this.shardAllocationService.assignStorageForItem(
+          index,
+          categoryId,
+          item,
+          rawContent,
+        ),
+      ensureV2Index: (index) => this.ensureV2Index(index),
+      hydrateShardCategoryNames: (index) => this.hydrateShardCategoryNames(index),
+      byteLength: (content) => this.byteLength(content),
+    });
+    this.syncDownCoordinator = new SyncDownCoordinator({
+      gistRepo,
+      localStore,
+      shardStateService: this.shardStateService,
+      pullShardChanges: (remoteIndex, changedShardGists) =>
+        this.pullShardChanges(remoteIndex, changedShardGists),
+      migrateLegacyToV2: (legacyGistId, legacyIndexContent) =>
+        this.migrateLegacyToV2(legacyGistId, legacyIndexContent),
+      resolveAccessibleRootGist: (rootGistId) =>
+        this.resolveAccessibleRootGist(rootGistId),
+      ensureV2Index: (index) => this.ensureV2Index(index),
+      parseShards: (raw, fallback) => this.parseShards(raw, fallback),
+      hydrateShardCategoryNames: (index) => this.hydrateShardCategoryNames(index),
+      createRootConfigUpdate: (config, rootGistId) =>
+        this.createRootConfigUpdate(config, rootGistId),
+    });
   }
 
   async initializeNexus(initialIndex: NexusIndex): Promise<string> {
@@ -107,121 +125,22 @@ export class SyncService {
     config: NexusConfig,
     lastRemoteUpdatedAt: string | null,
   ): Promise<SyncDownResult> {
-    let rootGistId = config.rootGistId || config.gistId;
-
-    if (!rootGistId) {
-      rootGistId = await this.gistRepo.findNexusGist();
-      if (!rootGistId) {
-        throw new Error("未找到 Nexus Gist，请先初始化");
-      }
-    }
-
-    const resolvedRoot = await this.resolveAccessibleRootGist(rootGistId);
-    rootGistId = resolvedRoot.rootGistId;
-    const rootMeta = resolvedRoot.rootMeta;
-    const remoteTime = rootMeta.updated_at as string;
-
-    const canSkip =
-      lastRemoteUpdatedAt === remoteTime && (config.schemaVersion || 1) >= 2;
-    if (canSkip) {
-      return {
-        index: null,
-        synced: false,
-        configUpdates: this.createRootConfigUpdate(config, rootGistId),
-      };
-    }
-
-    const rootFiles = await this.gistRepo.getGistFilesByNames(rootGistId, [
-      NEXUS_INDEX_V2_FILENAME,
-      NEXUS_SHARDS_FILENAME,
-      NEXUS_SHARD_STATE_FILENAME,
-      NEXUS_INDEX_FILENAME,
-    ]);
-
-    const v2IndexFile = rootFiles[NEXUS_INDEX_V2_FILENAME];
-    const legacyIndexFile = rootFiles[NEXUS_INDEX_FILENAME];
-
-    if (v2IndexFile?.content) {
-      const remoteIndex = this.ensureV2Index(
-        JSON.parse(v2IndexFile.content) as NexusIndex,
-      );
-      remoteIndex.shards = this.parseShards(rootFiles[NEXUS_SHARDS_FILENAME]?.content, remoteIndex.shards || []);
-      this.hydrateShardCategoryNames(remoteIndex);
-      const remoteShardState = this.parseShardState(
-        rootFiles[NEXUS_SHARD_STATE_FILENAME]?.content,
-      );
-      const changedShardGists = this.getChangedShardGists(
-        config.shardStateDigest || {},
-        remoteShardState,
-        lastRemoteUpdatedAt,
-      );
-      await this.pullShardChanges(remoteIndex, changedShardGists);
-      await this.localStore.saveIndex(remoteIndex);
-
-      return {
-        index: remoteIndex,
-        synced: true,
-        gistUpdatedAt: remoteTime,
-        configUpdates: {
-          ...(this.createRootConfigUpdate(config, rootGistId) || {}),
-          shardStateDigest: this.buildShardDigest(remoteShardState),
-        },
-      };
-    }
-
-    if (!legacyIndexFile?.content) {
-      throw new Error("Root Gist 中缺少 index 文件");
-    }
-
-    const migrated = await this.migrateLegacyToV2(
-      rootGistId,
-      legacyIndexFile.content,
-    );
-
-    const postMigrationConfig: NexusConfig = {
-      ...config,
-      gistId: migrated.rootGistId,
-      rootGistId: migrated.rootGistId,
-      schemaVersion: 2,
-      legacyGistId: rootGistId,
-    };
-
-    const rerun = await this.syncDown(postMigrationConfig, null);
-    rerun.configUpdates = {
-      ...(rerun.configUpdates || {}),
-      ...migrated.configUpdates,
-    };
-
-    return rerun;
+    return this.syncDownCoordinator.syncDown(config, lastRemoteUpdatedAt);
   }
 
   async assignStorageForItem(
-    rootGistId: string,
+    _rootGistId: string,
     index: NexusIndex,
     categoryId: string,
     item: GistIndexItem,
     rawContent: string,
   ): Promise<NexusFileStorage> {
-    const normalized = this.ensureV2Index(index);
-    const contentBytes = this.byteLength(rawContent);
-
-    const shard = await this.selectOrCreateShard(
-      rootGistId,
-      normalized,
+    return this.shardAllocationService.assignStorageForItem(
+      index,
       categoryId,
-      contentBytes,
+      item,
+      rawContent,
     );
-
-    const storage: NexusFileStorage = {
-      shardId: shard.id,
-      gistId: shard.gistId,
-      gist_file: item.gist_file,
-    };
-
-    item.storage = storage;
-    item.gist_file = storage.gist_file;
-
-    return storage;
   }
 
   async pushIndex(
@@ -231,41 +150,21 @@ export class SyncService {
     force = false,
   ): Promise<string> {
     if (!force) {
-      try {
-        const meta = await this.gistRepo.fetchGist(gistId);
-        const remoteTime = new Date(meta.updated_at).getTime();
-        const localTime = lastKnownRemoteTime
-          ? new Date(lastKnownRemoteTime).getTime()
-          : 0;
-
-        if (remoteTime > localTime) {
-          throw new Error("检测到同步冲突！远程数据已被其他设备更新。");
-        }
-      } catch (e: unknown) {
-        if (e instanceof Error && e.message.includes("同步冲突")) {
-          throw e;
-        }
-        console.warn("Conflict check failed, proceeding cautiously", e);
-      }
+      await this.conflictGuard.assertCanPush(gistId, lastKnownRemoteTime);
     }
 
-    const now = new Date().toISOString();
-    index.updated_at = now;
-
-    let gistTime: string;
-    if ((index.version || 1) >= 2) {
-      const normalized = this.ensureV2Index(index);
-      gistTime = await this.gistRepo.updateBatch(gistId, {
-        [NEXUS_INDEX_V2_FILENAME]: JSON.stringify(normalized, null, 2),
-        [NEXUS_SHARDS_FILENAME]: JSON.stringify(normalized.shards || [], null, 2),
-      });
-    } else {
-      gistTime = await this.gistRepo.updateGistFile(
-        gistId,
-        NEXUS_INDEX_FILENAME,
-        JSON.stringify(index, null, 2),
-      );
-    }
+    index.updated_at = new Date().toISOString();
+    const gistTime =
+      (index.version || 1) >= 2
+        ? await this.gistRepo.updateBatch(gistId, {
+            [NEXUS_INDEX_V2_FILENAME]: JSON.stringify(index, null, 2),
+            [NEXUS_SHARDS_FILENAME]: JSON.stringify(index.shards || [], null, 2),
+          })
+        : await this.gistRepo.updateGistFile(
+            gistId,
+            NEXUS_INDEX_FILENAME,
+            JSON.stringify(index, null, 2),
+          );
 
     await this.localStore.saveIndex(index);
     return gistTime;
@@ -277,55 +176,12 @@ export class SyncService {
     fileId: string,
     file: NexusFile,
   ): Promise<string> {
-    const v2 = (index.version || 1) >= 2;
-
-    if (!v2) {
-      return this.pushLegacyFile(rootGistId, file);
-    }
-
-    const item = this.findItemById(index, fileId)?.item;
-    if (!item) {
-      throw new Error("Index item not found for file");
-    }
-
-    if (!item.storage) {
-      throw new Error("V2 index item is missing storage mapping");
-    }
-
-    item.gist_file = file.filename;
-    item.storage.gist_file = file.filename;
-
-    let contentToPush = file.content;
-    if (file.isSecure) {
-      if (!this.cryptoProvider.hasPassword()) {
-        throw new Error("Vault password not set. Cannot push secure file.");
-      }
-      contentToPush = await this.cryptoProvider.encrypt(file.content);
-    }
-
-    const contentTime = await this.gistRepo.updateGistFile(
-      item.storage.gistId,
-      item.storage.gist_file,
-      contentToPush,
-    );
-
-    const updatedManifest = await this.shardManifestService.upsert(
-      index,
-      item,
-      file,
-      contentTime,
-    );
-    const rootTime = await this.updateRootShardState(
+    return this.remoteFileSyncService.pushFile({
       rootGistId,
       index,
-      item.storage.gistId,
-      updatedManifest,
-    );
-
-    file.markClean();
-    await this.fileRepo.save(file);
-
-    return rootTime || contentTime;
+      fileId,
+      file,
+    });
   }
 
   async deleteRemoteFile(
@@ -335,51 +191,13 @@ export class SyncService {
     filename: string,
     storageOverride?: NexusFileStorage,
   ): Promise<string> {
-    const v2 = (index.version || 1) >= 2;
-
-    if (!v2) {
-      return this.gistRepo.updateGistFile(rootGistId, filename, null);
-    }
-
-    if (storageOverride) {
-      const deletionTime = await this.gistRepo.updateGistFile(
-        storageOverride.gistId,
-        filename,
-        null,
-      );
-      const manifest = await this.shardManifestService.removeByStorage(
-        index,
-        fileId,
-        storageOverride,
-      );
-      const rootTime = await this.updateRootShardState(
-        rootGistId,
-        index,
-        storageOverride.gistId,
-        manifest,
-      );
-      return rootTime || deletionTime;
-    }
-
-    const item = this.findItemById(index, fileId)?.item;
-    if (!item?.storage) {
-      return this.gistRepo.updateGistFile(rootGistId, filename, null);
-    }
-
-    const deletionTime = await this.gistRepo.updateGistFile(
-      item.storage.gistId,
-      item.storage.gist_file,
-      null,
-    );
-
-    const manifest = await this.shardManifestService.removeByItem(index, item);
-    const rootTime = await this.updateRootShardState(
+    return this.remoteFileSyncService.deleteRemoteFile({
       rootGistId,
       index,
-      item.storage.gistId,
-      manifest,
-    );
-    return rootTime || deletionTime;
+      fileId,
+      filename,
+      storageOverride,
+    });
   }
 
   async repairShards(
@@ -387,610 +205,24 @@ export class SyncService {
     index: NexusIndex,
     options: RepairShardsOptions = {},
   ): Promise<RepairShardsResult> {
-    const apply = options.apply ?? false;
-    const rewriteReadme = options.rewriteReadme ?? true;
-    const rewriteDescription = options.rewriteDescription ?? true;
-    const dropEmptyShards = options.dropEmptyShards ?? true;
-    const deleteOrphanGists = options.deleteOrphanGists ?? false;
-    const sweepUnreferencedShardGists =
-      options.sweepUnreferencedShardGists ?? false;
-    const legacyGistIdToDelete = options.legacyGistIdToDelete || null;
-
-    const normalized = this.ensureV2Index(index);
-    this.hydrateShardCategoryNames(normalized);
-
-    const rawShards = [...(normalized.shards || [])];
-    const dedupedByGist = new Map<string, ShardDescriptor>();
-    let duplicateRowsMerged = 0;
-
-    for (const shard of rawShards) {
-      const normalizedShard: ShardDescriptor = {
-        id: shard.id || `shard-${shard.gistId}`,
-        gistId: shard.gistId,
-        categoryId: shard.categoryId,
-        categoryName: shard.categoryName,
-        part: shard.part || this.inferPart(shard.id),
-        kind: shard.kind || (shard.categoryId ? "category" : "large"),
-        fileCount: shard.fileCount || 0,
-        totalBytes: shard.totalBytes || 0,
-        updated_at: shard.updated_at || new Date().toISOString(),
-      };
-
-      const existing = dedupedByGist.get(normalizedShard.gistId);
-      if (existing) {
-        duplicateRowsMerged += 1;
-        dedupedByGist.set(
-          normalizedShard.gistId,
-          this.mergeShardDescriptor(existing, normalizedShard),
-        );
-      } else {
-        dedupedByGist.set(normalizedShard.gistId, normalizedShard);
-      }
-    }
-
-    const fileById = this.buildItemMapById(normalized);
-    const categoryNameById = new Map<string, string>();
-    for (const category of normalized.categories) {
-      categoryNameById.set(category.id, category.name);
-    }
-
-    const repairedShards: ShardDescriptor[] = [];
-    const removableShardGists: string[] = [];
-    let manifestsLoaded = 0;
-
-    for (const shard of dedupedByGist.values()) {
-      const manifest = await this.gistRepo.fetchShardManifest(shard.gistId);
-      if (manifest) {
-        manifestsLoaded += 1;
-      }
-
-      const linkedFileIds = new Set<string>();
-      for (const [fileId, ref] of fileById.entries()) {
-        const storage = ref.item.storage;
-        if (!storage) continue;
-        if (storage.gistId === shard.gistId || storage.shardId === shard.id) {
-          linkedFileIds.add(fileId);
-        }
-      }
-
-      const manifestFiles = manifest?.files || [];
-      const manifestByFileId = new Map<string, ShardManifestItem>();
-      for (const row of manifestFiles) {
-        manifestByFileId.set(row.fileId, row);
-      }
-
-      let categoryId = shard.categoryId;
-      if (!categoryId && shard.kind === "category") {
-        const categories = new Set<string>();
-        for (const linkedId of linkedFileIds) {
-          const ref = fileById.get(linkedId);
-          if (ref) categories.add(ref.categoryId);
-        }
-        if (categories.size === 1) {
-          categoryId = Array.from(categories)[0];
-        }
-      }
-
-      const categoryName =
-        shard.kind === "large"
-          ? "Large Files"
-          : categoryId
-            ? (categoryNameById.get(categoryId) || categoryId)
-            : (shard.categoryName || "Unknown Category");
-
-      const filesForStats: ShardManifestItem[] = linkedFileIds.size > 0
-        ? Array.from(linkedFileIds)
-            .map((fileId) => manifestByFileId.get(fileId))
-            .filter((x): x is ShardManifestItem => !!x)
-        : manifestFiles;
-
-      const linkedCount = linkedFileIds.size;
-      const manifestCount = manifestFiles.length;
-      const totalBytes = filesForStats.reduce((sum, f) => sum + (f.size || 0), 0);
-      const orphanManifestEntries = manifestFiles.filter(
-        (f) => !fileById.has(f.fileId),
-      ).length;
-
-      const repaired: ShardDescriptor = {
-        ...shard,
-        categoryId: shard.kind === "large" ? undefined : categoryId,
-        categoryName,
-        part: shard.part || this.inferPart(shard.id),
-        fileCount: linkedCount > 0 ? linkedCount : manifestCount,
-        totalBytes,
-        updated_at: manifest?.updated_at || shard.updated_at,
-      };
-
-      const emptyAndUnused = linkedCount === 0 && manifestCount === 0;
-      if (dropEmptyShards && emptyAndUnused) {
-        removableShardGists.push(shard.gistId);
-        continue;
-      }
-
-      repairedShards.push(repaired);
-
-      if (apply && rewriteReadme) {
-        await this.gistRepo.updateGistFile(
-          repaired.gistId,
-          "README.md",
-          this.buildShardReadme(
-            repaired,
-            linkedCount,
-            manifestCount,
-            totalBytes,
-            orphanManifestEntries,
-          ),
-        );
-      }
-
-      if (apply && rewriteDescription) {
-        await this.gistRepo.updateGistDescription(
-          repaired.gistId,
-          this.buildShardDescription(repaired),
-        );
-      }
-    }
-
-    repairedShards.sort((a, b) => {
-      const ka = `${a.kind}:${a.categoryName || ""}:${a.part}`;
-      const kb = `${b.kind}:${b.categoryName || ""}:${b.part}`;
-      return ka.localeCompare(kb);
-    });
-
-    let rootUpdatedAt: string | undefined;
-    const deletedShardGistIds: string[] = [];
-    let deletedLegacyGistId: string | undefined;
-    const sweptShardGistIds: string[] = [];
-
-    if (apply) {
-      normalized.shards = repairedShards;
-      normalized.updated_at = new Date().toISOString();
-      rootUpdatedAt = await this.gistRepo.updateBatch(rootGistId, {
-        [NEXUS_INDEX_V2_FILENAME]: JSON.stringify(normalized, null, 2),
-        [NEXUS_SHARDS_FILENAME]: JSON.stringify(repairedShards, null, 2),
-      });
-      await this.localStore.saveIndex(normalized);
-
-      if (deleteOrphanGists) {
-        const uniqueGists = Array.from(new Set(removableShardGists));
-        for (const gistId of uniqueGists) {
-          await this.gistRepo.deleteGist(gistId);
-          deletedShardGistIds.push(gistId);
-        }
-      }
-
-      if (sweepUnreferencedShardGists) {
-        const allShardGists = await this.gistRepo.listAllShardGistIds();
-        const keep = new Set<string>([
-          rootGistId,
-          ...repairedShards.map((s) => s.gistId),
-        ]);
-
-        for (const gistId of allShardGists) {
-          if (keep.has(gistId)) continue;
-          if (deletedShardGistIds.includes(gistId)) continue;
-          await this.gistRepo.deleteGist(gistId);
-          sweptShardGistIds.push(gistId);
-        }
-      }
-
-      if (
-        legacyGistIdToDelete &&
-        legacyGistIdToDelete !== rootGistId &&
-        !deletedShardGistIds.includes(legacyGistIdToDelete) &&
-        !sweptShardGistIds.includes(legacyGistIdToDelete)
-      ) {
-        try {
-          await this.gistRepo.deleteGist(legacyGistIdToDelete);
-          deletedLegacyGistId = legacyGistIdToDelete;
-        } catch (e) {
-          console.warn(
-            `[SyncService] Failed to delete legacy gist ${legacyGistIdToDelete}`,
-            e,
-          );
-        }
-      }
-    }
-
-    return {
-      applied: apply,
-      rawShardCount: rawShards.length,
-      dedupedShardCount: dedupedByGist.size,
-      duplicateRowsMerged,
-      manifestsLoaded,
-      repairedShardCount: repairedShards.length,
-      removedEmptyShards: removableShardGists.length,
-      removedShardGists: Array.from(new Set(removableShardGists)),
-      sweptUnreferencedShardGists: sweptShardGistIds.length,
-      sweptShardGistIds,
-      deletedLegacyGistId,
-      rootUpdatedAt,
-    };
-  }
-
-  private async pushLegacyFile(gistId: string, file: NexusFile): Promise<string> {
-    let contentToPush = file.content;
-    if (file.isSecure) {
-      if (!this.cryptoProvider.hasPassword()) {
-        throw new Error("Vault password not set. Cannot push secure file.");
-      }
-      contentToPush = await this.cryptoProvider.encrypt(file.content);
-    }
-
-    const newTime = await this.gistRepo.updateGistFile(
-      gistId,
-      file.filename,
-      contentToPush,
-    );
-    file.markClean();
-    await this.fileRepo.save(file);
-    return newTime;
+    return this.shardRepairService.repair(rootGistId, index, options);
   }
 
   private async pullShardChanges(
     remoteIndex: NexusIndex,
     changedShardGists: Set<string> | null,
   ): Promise<void> {
-    const itemById = this.buildItemMapById(remoteIndex);
-    const itemByStorageKey = this.buildItemMapByStorageKey(remoteIndex);
-
-    const filesToFetch: ShardFetchPlan = {};
-    const manifestsByShard = new Map<string, ShardManifest>();
-
-    for (const shard of remoteIndex.shards || []) {
-      if (changedShardGists && !changedShardGists.has(shard.gistId)) {
-        continue;
-      }
-      const manifest = await this.gistRepo.fetchShardManifest(shard.gistId);
-      if (!manifest) {
-        continue;
-      }
-
-      manifestsByShard.set(shard.gistId, manifest);
-      this.reconcileShardDescriptorWithManifest(remoteIndex, shard, manifest, itemById);
-
-      for (const manifestItem of manifest.files) {
-        const indexed = itemById.get(manifestItem.fileId);
-        if (!indexed) continue;
-
-        if (!indexed.item.storage) {
-          indexed.item.storage = {
-            shardId: shard.id,
-            gistId: shard.gistId,
-            gist_file: manifestItem.filename,
-          };
-          indexed.item.gist_file = manifestItem.filename;
-        }
-
-        const localFile = await this.fileRepo.get(indexed.item.id);
-        if (!localFile || localFile.checksum !== manifestItem.checksum) {
-          if (!filesToFetch[shard.gistId]) {
-            filesToFetch[shard.gistId] = new Set<string>();
-          }
-          filesToFetch[shard.gistId].add(manifestItem.filename);
-        }
-      }
-    }
-
-    const upsertFiles: NexusFile[] = [];
-    const conflictFiles: NexusFile[] = [];
-
-    for (const shard of remoteIndex.shards || []) {
-      if (changedShardGists && !changedShardGists.has(shard.gistId)) {
-        continue;
-      }
-      const manifest = manifestsByShard.get(shard.gistId);
-
-      if (!manifest) {
-        const fullFiles = await this.gistRepo.getGistContent(shard.gistId);
-        for (const [filename, gistFile] of Object.entries(fullFiles)) {
-          if (filename === SHARD_MANIFEST_FILENAME || filename === "README.md") {
-            continue;
-          }
-
-          const indexed =
-            itemByStorageKey.get(`${shard.gistId}::${filename}`) ||
-            this.findIndexedItemByLegacyFilename(remoteIndex, filename);
-          if (!indexed) continue;
-
-          await this.buildUpsertFile(
-            indexed.item,
-            gistFile.content,
-            gistFile.updated_at || new Date().toISOString(),
-            upsertFiles,
-            conflictFiles,
-          );
-        }
-
-        continue;
-      }
-
-      const needSet = filesToFetch[shard.gistId];
-      if (!needSet || needSet.size === 0) {
-        continue;
-      }
-
-      const requestedFiles = Array.from(needSet);
-      const fetched = await this.gistRepo.getGistFilesByNames(
-        shard.gistId,
-        requestedFiles,
-      );
-
-      const manifestByFilename = new Map<string, ShardManifestItem>();
-      for (const m of manifest.files) {
-        manifestByFilename.set(m.filename, m);
-      }
-
-      for (const [filename, gistFile] of Object.entries(fetched)) {
-        const indexed = itemByStorageKey.get(`${shard.gistId}::${filename}`);
-        if (!indexed) continue;
-
-        const manifestItem = manifestByFilename.get(filename);
-        const updatedAt = manifestItem?.updated_at || gistFile.updated_at || new Date().toISOString();
-        await this.buildUpsertFile(
-          indexed.item,
-          gistFile.content,
-          updatedAt,
-          upsertFiles,
-          conflictFiles,
-        );
-      }
-    }
-
-    if (upsertFiles.length > 0 || conflictFiles.length > 0) {
-      await this.fileRepo.saveBulk([...upsertFiles, ...conflictFiles]);
-    }
-  }
-
-  private async buildUpsertFile(
-    item: GistIndexItem,
-    remoteContentRaw: string,
-    remoteUpdatedAt: string,
-    upsertFiles: NexusFile[],
-    conflictFiles: NexusFile[],
-  ): Promise<void> {
-    let finalRemoteContent = remoteContentRaw;
-
-    if (item.isSecure) {
-      try {
-        finalRemoteContent = await this.cryptoProvider.decrypt(remoteContentRaw);
-      } catch (e) {
-        console.error(`Failed to decrypt ${item.gist_file}`, e);
-        finalRemoteContent = DECRYPTION_PENDING_PREFIX + remoteContentRaw;
-      }
-    }
-
-    const remoteChecksum = calculateChecksum(finalRemoteContent);
-    const localFile = await this.fileRepo.get(item.id);
-
-    if (localFile && localFile.isDirty && localFile.checksum !== remoteChecksum) {
-      const conflictId = `${item.id}_conflict_${Date.now().toString(36)}`;
-      const conflictFile = new NexusFile(
-        conflictId,
-        `${item.title} (Conflict)`,
-        localFile.content,
-        localFile.language,
-        localFile.tags,
-        localFile.updatedAt,
-        true,
-        localFile.checksum,
-        localFile.lastSyncedAt,
-        localFile.isSecure,
-      );
-      conflictFiles.push(conflictFile);
-    }
-
-    const nexusFile = new NexusFile(
-      item.id,
-      item.title,
-      finalRemoteContent,
-      item.language,
-      item.tags || [],
-      remoteUpdatedAt,
-      false,
-      remoteChecksum,
-      remoteUpdatedAt,
-      !!item.isSecure,
-    );
-
-    upsertFiles.push(nexusFile);
+    await this.shardPullService.pull({ remoteIndex, changedShardGists });
   }
 
   private async migrateLegacyToV2(
     legacyGistId: string,
     legacyIndexContent: string,
   ): Promise<{ rootGistId: string; configUpdates: Partial<NexusConfig> }> {
-    const legacyIndex = JSON.parse(legacyIndexContent) as NexusIndex;
-    const legacyFiles = await this.gistRepo.getGistContent(legacyGistId);
-
-    const migratedIndex: NexusIndex = this.ensureV2Index({
-      version: 2,
-      updated_at: new Date().toISOString(),
-      categories: legacyIndex.categories.map((cat) => ({
-        ...cat,
-        items: [],
-      })),
-      shards: [],
+    return this.legacyMigrationService.migrate({
+      legacyGistId,
+      legacyIndexContent,
     });
-    this.hydrateShardCategoryNames(migratedIndex);
-
-    const rootGistId = await this.gistRepo.createNexusGist(migratedIndex);
-
-    const filesByShard = new Map<string, Record<string, string>>();
-    const manifestByShard = new Map<string, ShardManifest>();
-
-    for (const category of legacyIndex.categories) {
-      const targetCategory = migratedIndex.categories.find((c) => c.id === category.id);
-      if (!targetCategory) continue;
-
-      for (const item of category.items) {
-        const remoteFile = legacyFiles[item.gist_file];
-        const remoteContent = remoteFile?.content || "";
-
-        const migratedItem: GistIndexItem = {
-          ...item,
-          gist_file: item.gist_file,
-        };
-
-        const storage = await this.assignStorageForItem(
-          rootGistId,
-          migratedIndex,
-          category.id,
-          migratedItem,
-          remoteContent,
-        );
-
-        const shardDescriptor = (migratedIndex.shards || []).find(
-          (s) => s.id === storage.shardId,
-        );
-        if (shardDescriptor) {
-          shardDescriptor.fileCount += 1;
-          shardDescriptor.totalBytes += this.byteLength(remoteContent);
-          shardDescriptor.updated_at = new Date().toISOString();
-        }
-
-        targetCategory.items.push(migratedItem);
-
-        const shardFiles = filesByShard.get(storage.gistId) || {};
-        shardFiles[storage.gist_file] = remoteContent;
-        filesByShard.set(storage.gistId, shardFiles);
-
-        const manifest =
-          manifestByShard.get(storage.gistId) ||
-          ({
-            version: 1,
-            shardId: storage.shardId,
-            updated_at: new Date().toISOString(),
-            files: [],
-          } as ShardManifest);
-
-        let checksumBase = remoteContent;
-        if (migratedItem.isSecure && this.cryptoProvider.hasPassword()) {
-          try {
-            checksumBase = await this.cryptoProvider.decrypt(remoteContent);
-          } catch (e) {
-            console.warn(
-              `[SyncService] Failed to decrypt secure file during migration: ${migratedItem.gist_file}`,
-              e,
-            );
-          }
-        }
-
-        manifest.files.push({
-          fileId: migratedItem.id,
-          filename: storage.gist_file,
-          checksum: calculateChecksum(checksumBase),
-          updated_at: new Date().toISOString(),
-          size: this.byteLength(remoteContent),
-          isSecure: !!migratedItem.isSecure,
-        });
-
-        manifestByShard.set(storage.gistId, manifest);
-      }
-    }
-
-    for (const [gistId, files] of filesByShard.entries()) {
-      const manifest = manifestByShard.get(gistId);
-      if (!manifest) continue;
-
-      await this.gistRepo.updateBatch(gistId, {
-        ...files,
-        [SHARD_MANIFEST_FILENAME]: JSON.stringify(manifest, null, 2),
-      });
-    }
-
-    migratedIndex.updated_at = new Date().toISOString();
-    const shardState = this.buildShardStateForRoot(migratedIndex, manifestByShard);
-
-    await this.gistRepo.updateBatch(rootGistId, {
-      [NEXUS_INDEX_V2_FILENAME]: JSON.stringify(migratedIndex, null, 2),
-      [NEXUS_SHARDS_FILENAME]: JSON.stringify(migratedIndex.shards || [], null, 2),
-      [NEXUS_SHARD_STATE_FILENAME]: JSON.stringify(shardState, null, 2),
-    });
-
-    await this.localStore.saveIndex(migratedIndex);
-
-    return {
-      rootGistId,
-      configUpdates: {
-        rootGistId,
-        gistId: rootGistId,
-        legacyGistId,
-        schemaVersion: 2,
-      },
-    };
-  }
-
-  private async selectOrCreateShard(
-    rootGistId: string,
-    index: NexusIndex,
-    categoryId: string,
-    contentBytes: number,
-  ): Promise<ShardDescriptor> {
-    const kind: "category" | "large" =
-      contentBytes > LARGE_FILE_BYTES ? "large" : "category";
-
-    const candidates = (index.shards || [])
-      .filter((s) => {
-        if (kind === "large") return s.kind === "large";
-        return s.kind === "category" && s.categoryId === categoryId;
-      })
-      .sort((a, b) => a.part - b.part);
-
-    let selected = candidates.find(
-      (s) =>
-        s.fileCount + 1 <= SHARD_FILE_LIMIT &&
-        s.totalBytes + contentBytes <= SHARD_TARGET_BYTES,
-    );
-
-    if (!selected) {
-      selected = candidates.find(
-        (s) =>
-          s.fileCount + 1 <= SHARD_FILE_LIMIT &&
-          s.totalBytes + contentBytes <= SHARD_HARD_BYTES,
-      );
-    }
-
-    if (selected) {
-      return selected;
-    }
-
-    const part = candidates.length > 0 ? Math.max(...candidates.map((s) => s.part)) + 1 : 1;
-    const shardId =
-      kind === "large"
-        ? `large-part-${part}`
-        : `cat-${this.normalizeId(categoryId)}-part-${part}`;
-    const categoryName =
-      kind === "large"
-        ? "Large Files"
-        : index.categories.find((c) => c.id === categoryId)?.name || categoryId;
-
-    const gistId = await this.gistRepo.createShardGist(
-      shardId,
-      categoryName,
-      part,
-      kind === "category" ? categoryId : undefined,
-      kind,
-    );
-
-    const descriptor: ShardDescriptor = {
-      id: shardId,
-      gistId,
-      categoryId: kind === "category" ? categoryId : undefined,
-      categoryName,
-      part,
-      kind,
-      fileCount: 0,
-      totalBytes: 0,
-      updated_at: new Date().toISOString(),
-    };
-
-    if (!index.shards) {
-      index.shards = [];
-    }
-    index.shards.push(descriptor);
-
-    return descriptor;
   }
 
   private createRootConfigUpdate(
@@ -998,7 +230,6 @@ export class SyncService {
     rootGistId: string,
   ): Partial<NexusConfig> | undefined {
     const updates: Partial<NexusConfig> = {};
-
     if (config.rootGistId !== rootGistId) {
       updates.rootGistId = rootGistId;
     }
@@ -1008,19 +239,16 @@ export class SyncService {
     if ((config.schemaVersion || 1) < 2) {
       updates.schemaVersion = 2;
     }
-
     return Object.keys(updates).length > 0 ? updates : undefined;
   }
 
-  private async resolveAccessibleRootGist(
-    rootGistId: string,
-  ): Promise<{ rootGistId: string; rootMeta: any }> {
+  private async resolveAccessibleRootGist(rootGistId: string): Promise<RootResolution> {
     try {
       const rootMeta = await this.gistRepo.fetchGist(rootGistId);
-      return { rootGistId, rootMeta };
-    } catch (e) {
-      if (!this.isNotFoundError(e)) {
-        throw e;
+      return { rootGistId, rootMeta: rootMeta as RootResolution["rootMeta"] };
+    } catch (error) {
+      if (!this.isNotFoundError(error)) {
+        throw error;
       }
     }
 
@@ -1032,33 +260,31 @@ export class SyncService {
     }
 
     const rootMeta = await this.gistRepo.fetchGist(discoveredRoot);
-    return { rootGistId: discoveredRoot, rootMeta };
+    return {
+      rootGistId: discoveredRoot,
+      rootMeta: rootMeta as RootResolution["rootMeta"],
+    };
   }
 
   private isNotFoundError(error: unknown): boolean {
     if (!error || typeof error !== "object") {
       return false;
     }
+
     const status = (error as { status?: number }).status;
     if (status === 404) {
       return true;
     }
+
     const message = (error as { message?: string }).message || "";
     return message.includes("Not Found");
   }
 
   private ensureV2Index(index: NexusIndex): NexusIndex {
-    if ((index.version || 1) >= 2) {
-      if (!index.shards) {
-        index.shards = [];
-      }
-      return index;
+    if ((index.version || 1) < 2) {
+      index.version = 2;
     }
-
-    index.version = 2;
-    if (!index.shards) {
-      index.shards = [];
-    }
+    index.shards = index.shards || [];
     return index;
   }
 
@@ -1073,184 +299,16 @@ export class SyncService {
     try {
       const parsed = JSON.parse(raw) as ShardDescriptor[];
       return Array.isArray(parsed) ? parsed : fallback;
-    } catch (e) {
-      console.warn("Failed to parse shard list from root", e);
+    } catch (error) {
+      console.warn("Failed to parse shard list from root", error);
       return fallback;
     }
   }
 
-  private parseShardState(raw: string | undefined): ShardStateIndex | null {
-    if (!raw) {
-      return null;
-    }
-
-    try {
-      const parsed = JSON.parse(raw) as ShardStateIndex;
-      if (!parsed || !Array.isArray(parsed.shards)) {
-        return null;
-      }
-      return {
-        version: 1,
-        updated_at: parsed.updated_at || new Date().toISOString(),
-        shards: parsed.shards
-          .filter((row) => !!row.gistId && !!row.shardId && !!row.manifestHash)
-          .map((row) => ({
-            shardId: row.shardId,
-            gistId: row.gistId,
-            manifestHash: row.manifestHash,
-            updated_at: row.updated_at || new Date().toISOString(),
-            fileCount: row.fileCount || 0,
-            totalBytes: row.totalBytes || 0,
-          })),
-      };
-    } catch (e) {
-      console.warn("Failed to parse shard state from root", e);
-      return null;
-    }
-  }
-
-  private buildShardDigest(state: ShardStateIndex | null): Record<string, string> {
-    if (!state) {
-      return {};
-    }
-    const digest: Record<string, string> = {};
-    for (const row of state.shards) {
-      digest[row.gistId] = row.manifestHash;
-    }
-    return digest;
-  }
-
-  private getChangedShardGists(
-    localDigest: Record<string, string>,
-    remoteState: ShardStateIndex | null,
-    lastRemoteUpdatedAt: string | null,
-  ): Set<string> | null {
-    if (!remoteState || !lastRemoteUpdatedAt) {
-      return null;
-    }
-
-    const changed = new Set<string>();
-    for (const row of remoteState.shards) {
-      if (localDigest[row.gistId] !== row.manifestHash) {
-        changed.add(row.gistId);
-      }
-    }
-    return changed;
-  }
-
-  private async updateRootShardState(
-    rootGistId: string,
-    index: NexusIndex,
-    targetGistId: string,
-    manifest: ShardManifest | null,
-  ): Promise<string | null> {
-    const currentState = await this.loadRemoteShardState(rootGistId);
-    const byGist = new Map<string, ShardStateItem>();
-    for (const row of currentState.shards) {
-      byGist.set(row.gistId, row);
-    }
-
-    if (manifest) {
-      const descriptor = (index.shards || []).find((s) => s.gistId === targetGistId);
-      if (descriptor) {
-        byGist.set(targetGistId, this.buildStateItem(descriptor, manifest));
-      }
-    } else {
-      byGist.delete(targetGistId);
-    }
-
-    for (const shard of index.shards || []) {
-      if (!byGist.has(shard.gistId)) {
-        byGist.set(shard.gistId, {
-          shardId: shard.id,
-          gistId: shard.gistId,
-          manifestHash: "",
-          updated_at: shard.updated_at,
-          fileCount: shard.fileCount,
-          totalBytes: shard.totalBytes,
-        });
-      }
-    }
-
-    const nextState: ShardStateIndex = {
-      version: 1,
-      updated_at: new Date().toISOString(),
-      shards: Array.from(byGist.values()),
-    };
-    return this.gistRepo.updateGistFile(
-      rootGistId,
-      NEXUS_SHARD_STATE_FILENAME,
-      JSON.stringify(nextState, null, 2),
-    );
-  }
-
-  private async loadRemoteShardState(rootGistId: string): Promise<ShardStateIndex> {
-    const files = (await this.gistRepo.getGistFilesByNames(rootGistId, [
-      NEXUS_SHARD_STATE_FILENAME,
-    ])) || {};
-    const parsed = this.parseShardState(files[NEXUS_SHARD_STATE_FILENAME]?.content);
-    if (parsed) {
-      return parsed;
-    }
-    return {
-      version: 1,
-      updated_at: new Date().toISOString(),
-      shards: [],
-    };
-  }
-
-  private buildStateItem(
-    descriptor: ShardDescriptor,
-    manifest: ShardManifest,
-  ): ShardStateItem {
-    return {
-      shardId: descriptor.id,
-      gistId: descriptor.gistId,
-      manifestHash: this.calculateManifestHash(manifest),
-      updated_at: manifest.updated_at || descriptor.updated_at,
-      fileCount: manifest.files.length,
-      totalBytes: manifest.files.reduce((sum, file) => sum + (file.size || 0), 0),
-    };
-  }
-
-  private buildShardStateForRoot(
-    index: NexusIndex,
-    manifestByShard: Map<string, ShardManifest>,
-  ): ShardStateIndex {
-    const shards: ShardStateItem[] = [];
-    for (const descriptor of index.shards || []) {
-      const manifest = manifestByShard.get(descriptor.gistId);
-      if (!manifest) {
-        continue;
-      }
-      shards.push(this.buildStateItem(descriptor, manifest));
-    }
-    return {
-      version: 1,
-      updated_at: new Date().toISOString(),
-      shards,
-    };
-  }
-
-  private calculateManifestHash(manifest: ShardManifest): string {
-    const stableFiles = [...manifest.files]
-      .map((file) => ({
-        fileId: file.fileId,
-        filename: file.filename,
-        checksum: file.checksum,
-        updated_at: file.updated_at,
-        size: file.size,
-        isSecure: !!file.isSecure,
-      }))
-      .sort((a, b) => a.fileId.localeCompare(b.fileId));
-    return calculateChecksum(JSON.stringify(stableFiles));
-  }
-
   private hydrateShardCategoryNames(index: NexusIndex): void {
-    const byId = new Map<string, string>();
-    for (const category of index.categories) {
-      byId.set(category.id, category.name);
-    }
+    const categoryNames = new Map(
+      index.categories.map((category) => [category.id, category.name]),
+    );
 
     for (const shard of index.shards || []) {
       if (shard.kind === "large") {
@@ -1259,151 +317,12 @@ export class SyncService {
       }
 
       if (!shard.categoryName && shard.categoryId) {
-        shard.categoryName = byId.get(shard.categoryId) || shard.categoryId;
+        shard.categoryName = categoryNames.get(shard.categoryId) || shard.categoryId;
       }
     }
-  }
-
-  private reconcileShardDescriptorWithManifest(
-    index: NexusIndex,
-    shard: ShardDescriptor,
-    manifest: ShardManifest,
-    itemById: Map<string, IndexedItem>,
-  ): void {
-    let count = 0;
-    let totalBytes = 0;
-
-    for (const manifestItem of manifest.files) {
-      const indexed = itemById.get(manifestItem.fileId);
-      if (!indexed) {
-        continue;
-      }
-
-      if (indexed.item.storage && indexed.item.storage.shardId !== shard.id) {
-        continue;
-      }
-
-      count += 1;
-      totalBytes += manifestItem.size || 0;
-    }
-
-    shard.fileCount = count;
-    shard.totalBytes = totalBytes;
-    shard.updated_at = manifest.updated_at || shard.updated_at;
-  }
-
-  private buildItemMapById(index: NexusIndex): Map<string, IndexedItem> {
-    const map = new Map<string, IndexedItem>();
-    for (const category of index.categories) {
-      for (const item of category.items) {
-        map.set(item.id, { categoryId: category.id, item });
-      }
-    }
-    return map;
-  }
-
-  private buildItemMapByStorageKey(index: NexusIndex): Map<string, IndexedItem> {
-    const map = new Map<string, IndexedItem>();
-    for (const category of index.categories) {
-      for (const item of category.items) {
-        if (!item.storage) continue;
-        map.set(`${item.storage.gistId}::${item.storage.gist_file}`, {
-          categoryId: category.id,
-          item,
-        });
-      }
-    }
-    return map;
-  }
-
-  private findItemById(index: NexusIndex, fileId: string): IndexedItem | null {
-    for (const category of index.categories) {
-      const item = category.items.find((i) => i.id === fileId);
-      if (item) {
-        return { categoryId: category.id, item };
-      }
-    }
-    return null;
-  }
-
-  private findIndexedItemByLegacyFilename(
-    index: NexusIndex,
-    filename: string,
-  ): IndexedItem | null {
-    for (const category of index.categories) {
-      const item = category.items.find((i) => i.gist_file === filename);
-      if (item) {
-        return { categoryId: category.id, item };
-      }
-    }
-    return null;
-  }
-
-  private normalizeId(value: string): string {
-    return value.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 36);
-  }
-
-  private inferPart(value: string | undefined): number {
-    if (!value) return 1;
-    const match = value.match(/part-(\d+)/i);
-    if (!match) return 1;
-    const parsed = parseInt(match[1], 10);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
-  }
-
-  private mergeShardDescriptor(
-    base: ShardDescriptor,
-    incoming: ShardDescriptor,
-  ): ShardDescriptor {
-    return {
-      id: base.id || incoming.id,
-      gistId: base.gistId || incoming.gistId,
-      categoryId: base.categoryId || incoming.categoryId,
-      categoryName: base.categoryName || incoming.categoryName,
-      part: base.part || incoming.part || 1,
-      kind: base.kind || incoming.kind,
-      fileCount: Math.max(base.fileCount || 0, incoming.fileCount || 0),
-      totalBytes: Math.max(base.totalBytes || 0, incoming.totalBytes || 0),
-      updated_at: base.updated_at || incoming.updated_at || new Date().toISOString(),
-    };
-  }
-
-  private buildShardReadme(
-    shard: ShardDescriptor,
-    linkedCount: number,
-    manifestCount: number,
-    totalBytes: number,
-    orphanManifestEntries: number,
-  ): string {
-    const summary = `[${shard.kind}] ${shard.categoryName || "N/A"} · Part ${shard.part} · Files ${linkedCount}/${manifestCount} · Orphans ${orphanManifestEntries} · Size ${this.formatBytes(totalBytes)}`;
-
-    return `# Nexus Shard
-
-${summary}
-
-| Key | Value |
-| --- | --- |
-| Shard | ${shard.id} |
-| Gist | ${shard.gistId} |
-| Category | ${shard.categoryName || "N/A"} (${shard.categoryId || "N/A"}) |
-| Updated | ${shard.updated_at} |
-`;
-  }
-
-  private buildShardDescription(shard: ShardDescriptor): string {
-    if (shard.kind === "large") {
-      return `Nexus Shard [large] Large Files #${shard.part}`;
-    }
-    return `Nexus Shard [category] ${shard.categoryName || shard.categoryId || "Unknown"} (${shard.categoryId || "N/A"}) #${shard.part}`;
   }
 
   private byteLength(content: string): number {
     return new TextEncoder().encode(content).length;
-  }
-
-  private formatBytes(bytes: number): string {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
   }
 }

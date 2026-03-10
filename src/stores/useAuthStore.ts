@@ -1,8 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import {
-  authFacade,
-} from '../bootstrap/container'
+import { appContainer } from '../bootstrap/container'
 import type {
   AuthSessionSnapshot,
   TokenStatus,
@@ -29,7 +27,7 @@ export const useAuthStore = defineStore('auth', () => {
   async function init() {
     isChecking.value = true
     try {
-      const snapshot = await authFacade.restoreSession()
+      const snapshot = await appContainer.authFacade.restoreSession()
       applySnapshot(snapshot)
     } finally {
       authBootstrapDone.value = true
@@ -47,14 +45,14 @@ export const useAuthStore = defineStore('auth', () => {
     verificationPromise = (async () => {
       try {
         const restoreCurrentClientToken = () => {
-          authFacade.syncClientToken(token.value || null)
+          appContainer.authFacade.syncClientToken(token.value || null)
         }
 
         if (token.value !== tokenSnapshot) {
           return
         }
 
-        const snapshot = await authFacade.verifyToken({
+        const snapshot = await appContainer.authFacade.verifyToken({
           token: tokenSnapshot,
           tokenVerifiedAt: verifiedAtSnapshot,
         }, {
@@ -81,7 +79,7 @@ export const useAuthStore = defineStore('auth', () => {
   async function setToken(newToken: string): Promise<boolean> {
     isChecking.value = true
     try {
-      const result = await authFacade.setToken(newToken)
+      const result = await appContainer.authFacade.setToken(newToken)
       if (result.ok) {
         applySnapshot(result.data)
       } else {
@@ -95,7 +93,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   function logout() {
     applySnapshot(createSignedOutAuthState())
-    void authFacade.logout().catch((e) => {
+    void appContainer.authFacade.logout().catch((e) => {
       console.warn('[Auth] Logout persistence failed', e)
     })
   }

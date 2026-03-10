@@ -12,7 +12,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../bootstrap/container", () => ({
-  authFacade: mocks.authFacade,
+  appContainer: {
+    authFacade: mocks.authFacade,
+  },
 }));
 
 import { useAuthStore } from "../useAuthStore";
@@ -134,12 +136,13 @@ describe("useAuthStore", () => {
     expect(store.tokenStatus).toBe("invalid");
   });
 
-  it("logout 会清空本地 token 并更新存储", () => {
+  it("logout 会清空本地 token 并更新存储", async () => {
     const store = useAuthStore();
     store.token = "existing-token";
     store.isAuthenticated = true;
 
     store.logout();
+    await Promise.resolve();
 
     expect(store.token).toBe("");
     expect(store.isAuthenticated).toBe(false);

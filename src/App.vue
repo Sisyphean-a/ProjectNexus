@@ -2,19 +2,24 @@
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, watch } from 'vue'
 import { darkTheme, lightTheme, type GlobalThemeOverrides, NConfigProvider, NMessageProvider, NDialogProvider } from 'naive-ui'
 import { useAuthStore } from './stores/useAuthStore'
-import { useNexusStore } from './stores/useNexusStore'
 import { useThemeStore } from './stores/useThemeStore'
+import { useWorkspaceStore } from './presentation/stores/useWorkspaceStore'
+import { useSyncStore } from './presentation/stores/useSyncStore'
 import { createAppSession } from './bootstrap/appSession'
 const Welcome = defineAsyncComponent(() => import('./views/Welcome.vue'))
 const CommandCenter = defineAsyncComponent(() => import('./views/CommandCenter.vue'))
 
 const authStore = useAuthStore()
-const nexusStore = useNexusStore()
 const themeStore = useThemeStore()
+const workspaceStore = useWorkspaceStore()
+const syncStore = useSyncStore()
 const appSession = createAppSession({
   theme: themeStore,
   auth: authStore,
-  workspace: nexusStore,
+  workspace: {
+    init: workspaceStore.init,
+    syncIfStale: syncStore.syncIfStale,
+  },
 })
 
 const showStartupStatus = computed(() => {
@@ -75,7 +80,6 @@ onBeforeUnmount(() => {
   appSession.dispose()
 })
 
-// 深色主题配置
 const darkThemeOverrides: GlobalThemeOverrides = {
   common: {
     primaryColor: '#3B82F6',
@@ -122,7 +126,6 @@ const darkThemeOverrides: GlobalThemeOverrides = {
   }
 }
 
-// 浅色主题配置
 const lightThemeOverrides: GlobalThemeOverrides = {
   common: {
     primaryColor: '#2563EB',

@@ -91,7 +91,7 @@ function handleChange(val: string) {
 <template>
   <div class="codemirror-container" :style="editorStyle">
     <Codemirror
-      v-model="props.modelValue"
+      v-model="model"
       :extensions="extensions"
       :autofocus="true"
       :indent-with-tab="true"
@@ -116,3 +116,4 @@ function handleChange(val: string) {
   font-family: 'Fira Code', Consolas, monospace;
 }
 </style>
+
