@@ -1,103 +1,29 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, watch } from 'vue'
 import { darkTheme, lightTheme, type GlobalThemeOverrides, NConfigProvider, NMessageProvider, NDialogProvider } from 'naive-ui'
 import { useAuthStore } from './stores/useAuthStore'
 import { useNexusStore } from './stores/useNexusStore'
 import { useThemeStore } from './stores/useThemeStore'
+import { createAppSession } from './bootstrap/appSession'
 const Welcome = defineAsyncComponent(() => import('./views/Welcome.vue'))
 const CommandCenter = defineAsyncComponent(() => import('./views/CommandCenter.vue'))
-
-const STARTUP_SYNC_DELAY_MS = 3000
-const STARTUP_SYNC_STALE_MS = 5 * 60 * 1000
 
 const authStore = useAuthStore()
 const nexusStore = useNexusStore()
 const themeStore = useThemeStore()
-const startupSyncState = ref<'idle' | 'scheduled' | 'running' | 'failed'>('idle')
-const hasBootstrappedNexus = ref(false)
-let startupSyncTimer: ReturnType<typeof setTimeout> | null = null
-
-function clearStartupSyncTimer() {
-  if (startupSyncTimer) {
-    clearTimeout(startupSyncTimer)
-    startupSyncTimer = null
-  }
-}
-
-function scheduleStartupSync() {
-  if (!authStore.isAuthenticated) {
-    return
-  }
-
-  clearStartupSyncTimer()
-  startupSyncState.value = 'scheduled'
-
-  startupSyncTimer = setTimeout(async () => {
-    startupSyncState.value = 'running'
-    try {
-      await nexusStore.syncIfStale(STARTUP_SYNC_STALE_MS)
-      startupSyncState.value = 'idle'
-    } catch (e) {
-      console.error('[App] Startup sync failed', e)
-      startupSyncState.value = 'failed'
-    }
-  }, STARTUP_SYNC_DELAY_MS)
-}
-
-async function bootstrapNexusForSession() {
-  if (!authStore.isAuthenticated || hasBootstrappedNexus.value) {
-    return
-  }
-
-  hasBootstrappedNexus.value = true
-  try {
-    await nexusStore.init()
-    scheduleStartupSync()
-    void authStore.verifyTokenInBackground().catch((e) => {
-      console.error('[App] Background token verification failed', e)
-    })
-  } catch (e) {
-    hasBootstrappedNexus.value = false
-    throw e
-  }
-}
-
-const showStartupStatus = computed(() => {
-  if (!authStore.isAuthenticated) {
-    return false
-  }
-  return startupSyncState.value !== 'idle' || authStore.tokenStatus === 'unknown'
+const appSession = createAppSession({
+  theme: themeStore,
+  auth: authStore,
+  workspace: nexusStore,
 })
 
-const startupStatusText = computed(() => {
-  if (startupSyncState.value === 'failed') {
-    return '后台同步失败，可稍后手动重试'
-  }
-  if (startupSyncState.value === 'running') {
-    return '正在后台同步远程数据...'
-  }
-  if (startupSyncState.value === 'scheduled') {
-    return '已加载本地缓存，稍后自动同步...'
-  }
-  if (authStore.tokenStatus === 'unknown') {
-    return '正在后台校验身份凭据...'
-  }
-  return ''
-})
-
-const startupStatusClass = computed(() => {
-  if (startupSyncState.value === 'failed') {
-    return 'border-amber-300/60 bg-amber-50/95 text-amber-700 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-200'
-  }
-
-  return 'border-slate-200/80 bg-white/95 text-slate-600 dark:border-slate-700/80 dark:bg-slate-900/85 dark:text-slate-300'
-})
+const showStartupStatus = computed(() => appSession.showStartupStatus.value)
+const startupStatusText = computed(() => appSession.startupStatusText.value)
+const startupStatusClass = computed(() => appSession.startupStatusClass.value)
 
 onMounted(async () => {
-  await Promise.all([themeStore.init(), authStore.init()])
-
   try {
-    await bootstrapNexusForSession()
+    await appSession.bootstrap()
   } catch (e) {
     console.error('[App] Bootstrap failed', e)
   }
@@ -106,23 +32,16 @@ onMounted(async () => {
 watch(
   () => authStore.isAuthenticated,
   async (authed) => {
-    if (authed) {
-      try {
-        await bootstrapNexusForSession()
-      } catch (e) {
-        console.error('[App] Session bootstrap failed', e)
-      }
-      return
+    try {
+      await appSession.handleAuthChange(authed)
+    } catch (e) {
+      console.error('[App] Session bootstrap failed', e)
     }
-
-    clearStartupSyncTimer()
-    startupSyncState.value = 'idle'
-    hasBootstrappedNexus.value = false
   },
 )
 
 onBeforeUnmount(() => {
-  clearStartupSyncTimer()
+  appSession.dispose()
 })
 
 // 深色主题配置
