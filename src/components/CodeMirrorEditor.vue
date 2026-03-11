@@ -39,6 +39,11 @@ const customKeymap = keymap.of([
 const languageExtension = shallowRef<Extension>([]);
 let languageRequestId = 0;
 
+const model = computed({
+  get: () => props.modelValue,
+  set: (value: string) => emit("update:modelValue", value),
+});
+
 watch(
   () => props.language,
   async (language) => {
@@ -83,7 +88,6 @@ const editorStyle = computed(() => ({
 }));
 
 function handleChange(val: string) {
-  emit('update:modelValue', val);
   emit('change', val);
 }
 </script>
