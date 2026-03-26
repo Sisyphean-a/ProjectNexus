@@ -46,6 +46,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     const result = await appContainer.workspaceFacade.initWorkspace();
     workspaceConfig.value = result.config;
     workspaceIndex.value = result.index;
+    remoteUpdatedAt.value = result.config.lastRemoteUpdatedAt || null;
     ensureDefaultSelection();
   }
 

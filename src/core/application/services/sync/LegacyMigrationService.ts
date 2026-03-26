@@ -13,9 +13,11 @@ import {
   NEXUS_INDEX_V2_FILENAME,
   NEXUS_SHARDS_FILENAME,
   NEXUS_SHARD_STATE_FILENAME,
+  NEXUS_SYNC_HEAD_FILENAME,
   SHARD_MANIFEST_FILENAME,
 } from "./SyncConstants";
 import { ShardStateService } from "./ShardStateService";
+import { buildSyncHead, serializeSyncHead } from "./SyncHead";
 
 interface AssignStorageOptions {
   rootGistId: string;
@@ -92,7 +94,7 @@ export class LegacyMigrationService {
         rootGistId,
         gistId: rootGistId,
         legacyGistId: options.legacyGistId,
-        schemaVersion: 2,
+        schemaVersion: 3,
       },
     };
   }
@@ -222,6 +224,7 @@ export class LegacyMigrationService {
       [NEXUS_INDEX_V2_FILENAME]: JSON.stringify(migratedIndex, null, 2),
       [NEXUS_SHARDS_FILENAME]: JSON.stringify(migratedIndex.shards || [], null, 2),
       [NEXUS_SHARD_STATE_FILENAME]: JSON.stringify(shardState, null, 2),
+      [NEXUS_SYNC_HEAD_FILENAME]: serializeSyncHead(buildSyncHead(migratedIndex, shardState, 3)),
     });
     await this.deps.localStore.saveIndex(migratedIndex);
   }

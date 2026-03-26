@@ -5,7 +5,14 @@ import type {
   ShardManifest,
 } from "../../../domain/entities/types";
 import { calculateChecksum } from "../../../domain/shared/Hash";
-import { NEXUS_SHARD_STATE_FILENAME } from "./SyncConstants";
+import {
+  NEXUS_SHARD_STATE_FILENAME,
+  NEXUS_SYNC_HEAD_FILENAME,
+} from "./SyncConstants";
+import {
+  buildSyncHead,
+  serializeSyncHead,
+} from "./SyncHead";
 import type { ShardStateIndex, ShardStateItem } from "./SyncTypes";
 
 export class ShardStateService {
@@ -62,9 +69,8 @@ export class ShardStateService {
   getChangedShardGists(
     localDigest: Record<string, string>,
     remoteState: ShardStateIndex | null,
-    lastRemoteUpdatedAt: string | null,
   ): Set<string> | null {
-    if (!remoteState || !lastRemoteUpdatedAt) {
+    if (!remoteState) {
       return null;
     }
 
@@ -121,11 +127,18 @@ export class ShardStateService {
       shards: Array.from(byGist.values()),
     };
 
-    return gistRepo.updateGistFile(
+    const stateUpdateTime = await gistRepo.updateGistFile(
       rootGistId,
       NEXUS_SHARD_STATE_FILENAME,
       JSON.stringify(nextState, null, 2),
     );
+    const syncHead = buildSyncHead(index, nextState, this.resolveSchemaVersion(index));
+    const headUpdateTime = await gistRepo.updateGistFile(
+      rootGistId,
+      NEXUS_SYNC_HEAD_FILENAME,
+      serializeSyncHead(syncHead),
+    );
+    return headUpdateTime || stateUpdateTime;
   }
 
   async loadRemoteShardState(rootGistId: string): Promise<ShardStateIndex> {
@@ -197,5 +210,9 @@ export class ShardStateService {
       throw new Error("ShardStateService requires gist repository for remote operations.");
     }
     return this.gistRepo;
+  }
+
+  private resolveSchemaVersion(index: NexusIndex): number {
+    return (index.version || 1) >= 2 ? 3 : 1;
   }
 }

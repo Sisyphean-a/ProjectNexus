@@ -23,8 +23,10 @@ import { SyncDownCoordinator } from "./sync/SyncDownCoordinator";
 import {
   NEXUS_INDEX_FILENAME,
   NEXUS_INDEX_V2_FILENAME,
+  NEXUS_SYNC_HEAD_FILENAME,
   NEXUS_SHARDS_FILENAME,
 } from "./sync/SyncConstants";
+import { buildSyncHead, serializeSyncHead } from "./sync/SyncHead";
 import type {
   RepairShardsOptions,
   RepairShardsResult,
@@ -159,6 +161,7 @@ export class SyncService {
         ? await this.gistRepo.updateBatch(gistId, {
             [NEXUS_INDEX_V2_FILENAME]: JSON.stringify(index, null, 2),
             [NEXUS_SHARDS_FILENAME]: JSON.stringify(index.shards || [], null, 2),
+            [NEXUS_SYNC_HEAD_FILENAME]: serializeSyncHead(buildSyncHead(index, null, 3)),
           })
         : await this.gistRepo.updateGistFile(
             gistId,
@@ -236,8 +239,8 @@ export class SyncService {
     if (config.gistId !== rootGistId) {
       updates.gistId = rootGistId;
     }
-    if ((config.schemaVersion || 1) < 2) {
-      updates.schemaVersion = 2;
+    if ((config.schemaVersion || 1) < 3) {
+      updates.schemaVersion = 3;
     }
     return Object.keys(updates).length > 0 ? updates : undefined;
   }

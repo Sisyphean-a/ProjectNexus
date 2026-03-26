@@ -6,8 +6,13 @@ import {
   NEXUS_INDEX_V2_FILENAME,
   NEXUS_SHARDS_FILENAME,
   NEXUS_SHARD_STATE_FILENAME,
+  NEXUS_SYNC_HEAD_FILENAME,
 } from "./SyncConstants";
 import { ShardStateService } from "./ShardStateService";
+import {
+  calculateSyncHeadHash,
+  parseSyncHead,
+} from "./SyncHead";
 import type { SyncDownResult } from "./SyncTypes";
 
 type RootResolution = {
@@ -20,7 +25,7 @@ interface SyncDownDependencies {
   localStore: Pick<ILocalStore, "saveIndex">;
   shardStateService: Pick<
     ShardStateService,
-    "buildShardDigest" | "getChangedShardGists" | "parseShardState"
+      "buildShardDigest" | "getChangedShardGists" | "parseShardState"
   >;
   pullShardChanges(
     remoteIndex: NexusIndex,
@@ -51,21 +56,34 @@ export class SyncDownCoordinator {
     const rootGistId = await this.resolveRootGistId(initialRootGistId);
     const resolvedRoot = await this.deps.resolveAccessibleRootGist(rootGistId);
     const remoteTime = resolvedRoot.rootMeta.updated_at;
+    const persistedRemoteTime = lastRemoteUpdatedAt || config.lastRemoteUpdatedAt || null;
 
     if (
-      lastRemoteUpdatedAt === remoteTime
-      && (config.schemaVersion || 1) >= 2
+      persistedRemoteTime === remoteTime
+      && (config.schemaVersion || 1) >= 3
     ) {
       return {
         index: null,
         synced: false,
-        configUpdates: this.deps.createRootConfigUpdate(config, resolvedRoot.rootGistId),
+        configUpdates: this.mergeConfigUpdates(
+          config,
+          resolvedRoot.rootGistId,
+          {
+            lastRemoteUpdatedAt: remoteTime,
+          },
+        ),
       };
+    }
+
+    const syncHeadResult = await this.trySyncHeadShortcut(config, resolvedRoot.rootGistId, remoteTime);
+    if (syncHeadResult) {
+      return syncHeadResult;
     }
 
     const rootFiles = await this.deps.gistRepo.getGistFilesByNames(
       resolvedRoot.rootGistId,
       [
+        NEXUS_SYNC_HEAD_FILENAME,
         NEXUS_INDEX_V2_FILENAME,
         NEXUS_SHARDS_FILENAME,
         NEXUS_SHARD_STATE_FILENAME,
@@ -80,7 +98,6 @@ export class SyncDownCoordinator {
         remoteTime,
         rootFiles,
         v2IndexFile.content,
-        lastRemoteUpdatedAt,
       );
     }
 
@@ -98,7 +115,7 @@ export class SyncDownCoordinator {
         ...config,
         gistId: migrated.rootGistId,
         rootGistId: migrated.rootGistId,
-        schemaVersion: 2,
+        schemaVersion: 3,
         legacyGistId: resolvedRoot.rootGistId,
       },
       null,
@@ -109,6 +126,41 @@ export class SyncDownCoordinator {
       ...migrated.configUpdates,
     };
     return rerun;
+  }
+
+  private async trySyncHeadShortcut(
+    config: NexusConfig,
+    rootGistId: string,
+    remoteTime: string,
+  ): Promise<SyncDownResult | null> {
+    const files = await this.deps.gistRepo.getGistFilesByNames(
+      rootGistId,
+      [NEXUS_SYNC_HEAD_FILENAME],
+    );
+    const rawHead = files[NEXUS_SYNC_HEAD_FILENAME]?.content;
+    const parsedHead = parseSyncHead(rawHead);
+    if (!parsedHead || !rawHead) {
+      return null;
+    }
+
+    const syncHeadHash = calculateSyncHeadHash(rawHead);
+    if (config.lastSyncHeadHash !== syncHeadHash) {
+      return null;
+    }
+
+    return {
+      index: null,
+      synced: false,
+      gistUpdatedAt: remoteTime,
+      configUpdates: this.mergeConfigUpdates(
+        config,
+        rootGistId,
+        {
+          lastRemoteUpdatedAt: remoteTime,
+          lastSyncHeadHash: syncHeadHash,
+        },
+      ),
+    };
   }
 
   private async resolveRootGistId(rootGistId: string | null): Promise<string> {
@@ -129,7 +181,6 @@ export class SyncDownCoordinator {
     remoteTime: string,
     rootFiles: Record<string, { content?: string }>,
     v2IndexContent: string,
-    lastRemoteUpdatedAt: string | null,
   ): Promise<SyncDownResult> {
     const remoteIndex = this.deps.ensureV2Index(
       JSON.parse(v2IndexContent) as NexusIndex,
@@ -147,8 +198,11 @@ export class SyncDownCoordinator {
     const changedShardGists = this.deps.shardStateService.getChangedShardGists(
       config.shardStateDigest || {},
       remoteShardState,
-      lastRemoteUpdatedAt,
     );
+    const rawSyncHead = rootFiles[NEXUS_SYNC_HEAD_FILENAME]?.content;
+    const nextSyncHeadHash = rawSyncHead
+      ? calculateSyncHeadHash(rawSyncHead)
+      : null;
 
     await this.deps.pullShardChanges(remoteIndex, changedShardGists);
     await this.deps.localStore.saveIndex(remoteIndex);
@@ -157,10 +211,28 @@ export class SyncDownCoordinator {
       index: remoteIndex,
       synced: true,
       gistUpdatedAt: remoteTime,
-      configUpdates: {
-        ...(this.deps.createRootConfigUpdate(config, rootGistId) || {}),
-        shardStateDigest: this.deps.shardStateService.buildShardDigest(remoteShardState),
-      },
+      configUpdates: this.mergeConfigUpdates(
+        config,
+        rootGistId,
+        {
+          shardStateDigest: this.deps.shardStateService.buildShardDigest(remoteShardState),
+          lastRemoteUpdatedAt: remoteTime,
+          lastSyncHeadHash: nextSyncHeadHash,
+        },
+      ),
     };
+  }
+
+  private mergeConfigUpdates(
+    config: NexusConfig,
+    rootGistId: string,
+    updates: Partial<NexusConfig>,
+  ): Partial<NexusConfig> | undefined {
+    const rootUpdates = this.deps.createRootConfigUpdate(config, rootGistId) || {};
+    const next = {
+      ...rootUpdates,
+      ...updates,
+    };
+    return Object.keys(next).length > 0 ? next : undefined;
   }
 }

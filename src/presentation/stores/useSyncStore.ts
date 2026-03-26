@@ -38,7 +38,7 @@ export const useSyncStore = defineStore("sync", () => {
       workspaceIndex.value = result.index;
     }
 
-    if (result.synced) {
+    if (result.gistUpdatedAt || result.synced) {
       applyRemoteTime(result.gistUpdatedAt || result.index?.updated_at);
     }
 

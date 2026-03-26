@@ -85,12 +85,12 @@ export class WorkspaceFacade {
       ...config,
       gistId,
       rootGistId: gistId,
-      schemaVersion: 2,
+      schemaVersion: 3,
     };
     await this.localStore.saveConfig({
       gistId,
       rootGistId: gistId,
-      schemaVersion: 2,
+      schemaVersion: 3,
     });
     return { config: nextConfig, index };
   }

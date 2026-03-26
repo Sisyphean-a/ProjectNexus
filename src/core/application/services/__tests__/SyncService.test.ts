@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NexusFile } from "../../../domain/entities/NexusFile";
 import type { NexusIndex } from "../../../domain/entities/types";
+import { calculateChecksum } from "../../../domain/shared/Hash";
 import { SyncService } from "../SyncService";
 import { LegacyMigrationService } from "../sync/LegacyMigrationService";
 import { ShardPullService } from "../sync/ShardPullService";
@@ -105,13 +106,54 @@ describe("SyncService", () => {
     });
 
     const result = await service.syncDown(
-      createConfig({ gistId: "root-1", rootGistId: null, schemaVersion: 2 }),
+      createConfig({ gistId: "root-1", rootGistId: null, schemaVersion: 3 }),
       "2026-01-01T00:00:00.000Z",
     );
 
     expect(result.synced).toBe(false);
     expect(result.index).toBeNull();
-    expect(result.configUpdates).toEqual({ rootGistId: "root-1" });
+    expect(result.configUpdates).toEqual({
+      rootGistId: "root-1",
+      lastRemoteUpdatedAt: "2026-01-01T00:00:00.000Z",
+    });
+  });
+
+  it("syncDown 在 sync head hash 未变化时跳过索引拉取", async () => {
+    const { gistRepo, service } = createDeps();
+    const syncHeadContent = JSON.stringify({
+      version: 1,
+      updated_at: "2026-01-01T00:00:00.000Z",
+      indexHash: "idx-hash",
+      shardStateHash: "state-hash",
+      schemaVersion: 3,
+    });
+    const syncHeadHash = calculateChecksum(syncHeadContent);
+
+    gistRepo.fetchGist.mockResolvedValue({
+      updated_at: "2026-01-01T00:00:00.000Z",
+    });
+    gistRepo.getGistFilesByNames.mockResolvedValue({
+      "nexus_sync_head.json": {
+        content: syncHeadContent,
+      },
+    });
+
+    const result = await service.syncDown(
+      createConfig({
+        gistId: "root-1",
+        rootGistId: "root-1",
+        schemaVersion: 3,
+        lastSyncHeadHash: syncHeadHash,
+      }),
+      null,
+    );
+
+    expect(result.synced).toBe(false);
+    expect(result.index).toBeNull();
+    expect(gistRepo.getGistFilesByNames).toHaveBeenCalledWith(
+      "root-1",
+      ["nexus_sync_head.json"],
+    );
   });
 
   it("syncDown 在配置 gist 404 时会自动重定位到可用 root gist", async () => {
@@ -141,11 +183,15 @@ describe("SyncService", () => {
 
     expect(gistRepo.findNexusGist).toHaveBeenCalledTimes(1);
     expect(result.synced).toBe(true);
-    expect(result.configUpdates).toEqual({
-      rootGistId: "root-2",
-      gistId: "root-2",
-      shardStateDigest: {},
-    });
+    expect(result.configUpdates).toEqual(
+      expect.objectContaining({
+        rootGistId: "root-2",
+        gistId: "root-2",
+        schemaVersion: 3,
+        shardStateDigest: {},
+        lastRemoteUpdatedAt: "2026-02-01T00:00:00.000Z",
+      }),
+    );
   });
 
   it("syncDown 会加载 v2 index 并执行 shard 拉取流程", async () => {
@@ -170,6 +216,15 @@ describe("SyncService", () => {
       updated_at: "2026-02-01T00:00:00.000Z",
     });
     gistRepo.getGistFilesByNames.mockResolvedValue({
+      "nexus_sync_head.json": {
+        content: JSON.stringify({
+          version: 1,
+          updated_at: "2026-02-01T00:00:00.000Z",
+          indexHash: "idx",
+          shardStateHash: "state",
+          schemaVersion: 3,
+        }),
+      },
       "nexus_index_v2.json": {
         content: JSON.stringify(remoteIndex),
       },
@@ -186,6 +241,13 @@ describe("SyncService", () => {
     expect(result.synced).toBe(true);
     expect(result.gistUpdatedAt).toBe("2026-02-01T00:00:00.000Z");
     expect(result.index?.shards?.[0].categoryName).toBe("Category A");
+    expect(result.configUpdates).toEqual(
+      expect.objectContaining({
+        lastRemoteUpdatedAt: "2026-02-01T00:00:00.000Z",
+        shardStateDigest: {},
+        lastSyncHeadHash: expect.any(String),
+      }),
+    );
     expect(pullSpy).toHaveBeenCalledTimes(1);
     expect(localStore.saveIndex).toHaveBeenCalledTimes(1);
   });
@@ -548,7 +610,7 @@ describe("LegacyMigrationService", () => {
         rootGistId: "root-v2",
         gistId: "root-v2",
         legacyGistId: "legacy-root",
-        schemaVersion: 2,
+        schemaVersion: 3,
       },
     });
     expect(gistRepo.createNexusGist).toHaveBeenCalledTimes(1);
@@ -567,6 +629,7 @@ describe("LegacyMigrationService", () => {
         "nexus_index_v2.json": expect.any(String),
         "nexus_shards.json": expect.any(String),
         "nexus_shard_state.json": expect.any(String),
+        "nexus_sync_head.json": expect.any(String),
       }),
     );
     expect(localStore.saveIndex).toHaveBeenCalledTimes(1);

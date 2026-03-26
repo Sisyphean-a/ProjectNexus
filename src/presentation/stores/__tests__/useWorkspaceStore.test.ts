@@ -51,7 +51,7 @@ describe("useWorkspaceStore", () => {
 
   it("init 会加载 workspace 并默认选中首分类", async () => {
     mocks.workspaceFacade.initWorkspace.mockResolvedValue({
-      config: createConfig(),
+      config: createConfig({ lastRemoteUpdatedAt: "2026-03-20T00:00:00.000Z" }),
       index: createIndex({
         categories: [
           createCategory({ id: "cat-a", items: [] }),
@@ -70,6 +70,7 @@ describe("useWorkspaceStore", () => {
       "cat-a",
       "cat-b",
     ]);
+    expect(workspaceStore.remoteUpdatedAt).toBe("2026-03-20T00:00:00.000Z");
     expect(selectionStore.selectedCategoryId).toBe("cat-a");
     expect(selectionStore.selectedFileId).toBe(null);
   });

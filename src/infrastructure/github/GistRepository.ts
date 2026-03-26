@@ -7,6 +7,7 @@ import type {
   ShardDescriptor,
   ShardManifest,
 } from "../../core/domain/entities/types";
+import { buildSyncHead, serializeSyncHead } from "../../core/application/services/sync/SyncHead";
 
 const NEXUS_GIST_DESCRIPTION =
   "Nexus Configuration Index - Do not edit manually if possible";
@@ -14,6 +15,7 @@ const NEXUS_INDEX_FILENAME = "nexus_index.json";
 const NEXUS_INDEX_V2_FILENAME = "nexus_index_v2.json";
 const NEXUS_SHARDS_FILENAME = "nexus_shards.json";
 const NEXUS_SHARD_STATE_FILENAME = "nexus_shard_state.json";
+const NEXUS_SYNC_HEAD_FILENAME = "nexus_sync_head.json";
 const SHARD_MANIFEST_FILENAME = "shard_manifest.json";
 
 interface GithubGistFile {
@@ -180,6 +182,11 @@ export class GistRepository implements IGistRepository {
     };
 
     if (isV2) {
+      const initialShardState = {
+        version: 1 as const,
+        updated_at: new Date().toISOString(),
+        shards: [],
+      };
       files[NEXUS_INDEX_V2_FILENAME] = {
         content: JSON.stringify(initialIndex, null, 2),
       };
@@ -187,15 +194,10 @@ export class GistRepository implements IGistRepository {
         content: JSON.stringify(initialIndex.shards || [], null, 2),
       };
       files[NEXUS_SHARD_STATE_FILENAME] = {
-        content: JSON.stringify(
-          {
-            version: 1,
-            updated_at: new Date().toISOString(),
-            shards: [],
-          },
-          null,
-          2,
-        ),
+        content: JSON.stringify(initialShardState, null, 2),
+      };
+      files[NEXUS_SYNC_HEAD_FILENAME] = {
+        content: serializeSyncHead(buildSyncHead(initialIndex, initialShardState, 3)),
       };
     } else {
       files[NEXUS_INDEX_FILENAME] = {

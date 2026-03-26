@@ -63,7 +63,6 @@ describe("ShardStateService", () => {
           },
         ],
       },
-      "2026-01-01T00:00:00.000Z",
     );
 
     expect(Array.from(changed ?? [])).toEqual(["gist-1"]);
