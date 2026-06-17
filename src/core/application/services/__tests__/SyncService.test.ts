@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NexusFile } from "../../../domain/entities/NexusFile";
 import type { NexusIndex } from "../../../domain/entities/types";
+import { calculateChecksum } from "../../../domain/shared/Hash";
 import { SyncService } from "../SyncService";
+import { LegacyMigrationService } from "../sync/LegacyMigrationService";
+import { ShardPullService } from "../sync/ShardPullService";
 import { createConfig } from "../../../../../tests/factories/createConfig";
 import {
   createCategory,
@@ -103,13 +106,54 @@ describe("SyncService", () => {
     });
 
     const result = await service.syncDown(
-      createConfig({ gistId: "root-1", rootGistId: null, schemaVersion: 2 }),
+      createConfig({ gistId: "root-1", rootGistId: null, schemaVersion: 3 }),
       "2026-01-01T00:00:00.000Z",
     );
 
     expect(result.synced).toBe(false);
     expect(result.index).toBeNull();
-    expect(result.configUpdates).toEqual({ rootGistId: "root-1" });
+    expect(result.configUpdates).toEqual({
+      rootGistId: "root-1",
+      lastRemoteUpdatedAt: "2026-01-01T00:00:00.000Z",
+    });
+  });
+
+  it("syncDown 在 sync head hash 未变化时跳过索引拉取", async () => {
+    const { gistRepo, service } = createDeps();
+    const syncHeadContent = JSON.stringify({
+      version: 1,
+      updated_at: "2026-01-01T00:00:00.000Z",
+      indexHash: "idx-hash",
+      shardStateHash: "state-hash",
+      schemaVersion: 3,
+    });
+    const syncHeadHash = calculateChecksum(syncHeadContent);
+
+    gistRepo.fetchGist.mockResolvedValue({
+      updated_at: "2026-01-01T00:00:00.000Z",
+    });
+    gistRepo.getGistFilesByNames.mockResolvedValue({
+      "nexus_sync_head.json": {
+        content: syncHeadContent,
+      },
+    });
+
+    const result = await service.syncDown(
+      createConfig({
+        gistId: "root-1",
+        rootGistId: "root-1",
+        schemaVersion: 3,
+        lastSyncHeadHash: syncHeadHash,
+      }),
+      null,
+    );
+
+    expect(result.synced).toBe(false);
+    expect(result.index).toBeNull();
+    expect(gistRepo.getGistFilesByNames).toHaveBeenCalledWith(
+      "root-1",
+      ["nexus_sync_head.json"],
+    );
   });
 
   it("syncDown 在配置 gist 404 时会自动重定位到可用 root gist", async () => {
@@ -139,10 +183,15 @@ describe("SyncService", () => {
 
     expect(gistRepo.findNexusGist).toHaveBeenCalledTimes(1);
     expect(result.synced).toBe(true);
-    expect(result.configUpdates).toEqual({
-      rootGistId: "root-2",
-      gistId: "root-2",
-    });
+    expect(result.configUpdates).toEqual(
+      expect.objectContaining({
+        rootGistId: "root-2",
+        gistId: "root-2",
+        schemaVersion: 3,
+        shardStateDigest: {},
+        lastRemoteUpdatedAt: "2026-02-01T00:00:00.000Z",
+      }),
+    );
   });
 
   it("syncDown 会加载 v2 index 并执行 shard 拉取流程", async () => {
@@ -167,6 +216,15 @@ describe("SyncService", () => {
       updated_at: "2026-02-01T00:00:00.000Z",
     });
     gistRepo.getGistFilesByNames.mockResolvedValue({
+      "nexus_sync_head.json": {
+        content: JSON.stringify({
+          version: 1,
+          updated_at: "2026-02-01T00:00:00.000Z",
+          indexHash: "idx",
+          shardStateHash: "state",
+          schemaVersion: 3,
+        }),
+      },
       "nexus_index_v2.json": {
         content: JSON.stringify(remoteIndex),
       },
@@ -183,6 +241,13 @@ describe("SyncService", () => {
     expect(result.synced).toBe(true);
     expect(result.gistUpdatedAt).toBe("2026-02-01T00:00:00.000Z");
     expect(result.index?.shards?.[0].categoryName).toBe("Category A");
+    expect(result.configUpdates).toEqual(
+      expect.objectContaining({
+        lastRemoteUpdatedAt: "2026-02-01T00:00:00.000Z",
+        shardStateDigest: {},
+        lastSyncHeadHash: expect.any(String),
+      }),
+    );
     expect(pullSpy).toHaveBeenCalledTimes(1);
     expect(localStore.saveIndex).toHaveBeenCalledTimes(1);
   });
@@ -201,6 +266,22 @@ describe("SyncService", () => {
         false,
       ),
     ).rejects.toThrow("同步冲突");
+
+    expect(gistRepo.updateBatch).not.toHaveBeenCalled();
+  });
+
+  it("pushIndex 在无法确认远端状态时显式失败", async () => {
+    const { gistRepo, service } = createDeps();
+    gistRepo.fetchGist.mockRejectedValue(new Error("network down"));
+
+    await expect(
+      service.pushIndex(
+        "root-1",
+        createIndex(),
+        "2026-01-01T00:00:00.000Z",
+        false,
+      ),
+    ).rejects.toThrow("无法确认远端最新状态");
 
     expect(gistRepo.updateBatch).not.toHaveBeenCalled();
   });
@@ -246,9 +327,15 @@ describe("SyncService", () => {
     const { gistRepo, fileRepo, cryptoProvider, service } = createDeps();
     const upsertSpy = vi
       .spyOn((service as any).shardManifestService, "upsert")
-      .mockResolvedValue(undefined);
+      .mockResolvedValue({
+        version: 1,
+        shardId: "shard-1",
+        updated_at: "2026-04-01T00:00:00.000Z",
+        files: [],
+      });
 
     gistRepo.updateGistFile.mockResolvedValue("2026-04-01T00:00:00.000Z");
+    gistRepo.getGistFilesByNames.mockResolvedValue({});
     cryptoProvider.hasPassword.mockReturnValue(true);
     cryptoProvider.encrypt.mockResolvedValue("cipher-text");
 
@@ -281,9 +368,15 @@ describe("SyncService", () => {
     const { gistRepo, service } = createDeps();
     const removeSpy = vi
       .spyOn((service as any).shardManifestService, "removeByStorage")
-      .mockResolvedValue(undefined);
+      .mockResolvedValue({
+        version: 1,
+        shardId: "shard-x",
+        updated_at: "2026-05-01T00:00:00.000Z",
+        files: [],
+      });
 
     gistRepo.updateGistFile.mockResolvedValue("2026-05-01T00:00:00.000Z");
+    gistRepo.getGistFilesByNames.mockResolvedValue({});
     const index = createIndex();
     const storage = {
       shardId: "shard-x",
@@ -435,3 +528,200 @@ describe("SyncService", () => {
     expect(parsed).toBe(fallback);
   });
 });
+
+describe("LegacyMigrationService", () => {
+  it("会把 legacy root gist 迁移为 v2 root/shard 并返回配置更新", async () => {
+    const gistRepo = {
+      getGistContent: vi.fn().mockResolvedValue({
+        "legacy-file.yaml": {
+          content: "remote-content",
+        },
+      }),
+      createNexusGist: vi.fn().mockResolvedValue("root-v2"),
+      updateBatch: vi.fn().mockResolvedValue("2026-06-01T00:00:00.000Z"),
+    };
+    const localStore = {
+      saveIndex: vi.fn().mockResolvedValue(undefined),
+    };
+    const cryptoProvider = {
+      hasPassword: vi.fn(() => false),
+      decrypt: vi.fn(),
+    };
+    const shardStateService = {
+      buildShardStateForRoot: vi.fn().mockReturnValue({
+        version: 1,
+        updated_at: "2026-06-01T00:00:00.000Z",
+        shards: [],
+      }),
+    };
+
+    const service = new LegacyMigrationService({
+      gistRepo: gistRepo as any,
+      localStore: localStore as any,
+      cryptoProvider: cryptoProvider as any,
+      shardStateService: shardStateService as any,
+      assignStorageForItem: async ({ index, item }) => {
+        index.shards = [
+          createShard({
+            id: "shard-1",
+            gistId: "shard-gist-1",
+            fileCount: 0,
+            totalBytes: 0,
+          }),
+        ];
+
+        item.storage = {
+          shardId: "shard-1",
+          gistId: "shard-gist-1",
+          gist_file: "legacy-file.yaml",
+        };
+        return item.storage;
+      },
+      ensureV2Index(index) {
+        index.version = 2;
+        index.shards = index.shards || [];
+        return index;
+      },
+      hydrateShardCategoryNames() {},
+      byteLength(content) {
+        return new TextEncoder().encode(content).length;
+      },
+    });
+
+    const legacyIndex: NexusIndex = {
+      version: 1,
+      updated_at: "2026-01-01T00:00:00.000Z",
+      categories: [
+        createCategory({
+          id: "cat-a",
+          items: [createIndexItem({ gist_file: "legacy-file.yaml" })],
+        }),
+      ],
+    };
+
+    const result = await service.migrate({
+      legacyGistId: "legacy-root",
+      legacyIndexContent: JSON.stringify(legacyIndex),
+    });
+
+    expect(result).toEqual({
+      rootGistId: "root-v2",
+      configUpdates: {
+        rootGistId: "root-v2",
+        gistId: "root-v2",
+        legacyGistId: "legacy-root",
+        schemaVersion: 3,
+      },
+    });
+    expect(gistRepo.createNexusGist).toHaveBeenCalledTimes(1);
+    expect(gistRepo.updateBatch).toHaveBeenCalledTimes(2);
+    expect(gistRepo.updateBatch).toHaveBeenNthCalledWith(
+      1,
+      "shard-gist-1",
+      expect.objectContaining({
+        "legacy-file.yaml": "remote-content",
+      }),
+    );
+    expect(gistRepo.updateBatch).toHaveBeenNthCalledWith(
+      2,
+      "root-v2",
+      expect.objectContaining({
+        "nexus_index_v2.json": expect.any(String),
+        "nexus_shards.json": expect.any(String),
+        "nexus_shard_state.json": expect.any(String),
+        "nexus_sync_head.json": expect.any(String),
+      }),
+    );
+    expect(localStore.saveIndex).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ShardPullService", () => {
+  it("manifest 拉取下本地 dirty 文件冲突时会批量保存远端文件和 conflict 副本", async () => {
+    const gistRepo = {
+      getGistContent: vi.fn(),
+    };
+    const fileRepo = {
+      get: vi.fn(),
+      saveBulk: vi.fn().mockResolvedValue(undefined),
+    };
+    const cryptoProvider = {
+      decrypt: vi.fn(async (value: string) => value),
+    };
+    const shardFetchPlanner = {
+      fetchManifests: vi.fn().mockResolvedValue([
+        {
+          gistId: "shard-gist-1",
+          manifest: {
+            version: 1,
+            shardId: "shard-1",
+            updated_at: "2026-06-02T00:00:00.000Z",
+            files: [
+              {
+                fileId: "file-1",
+                filename: "file-1.yaml",
+                checksum: "remote-checksum",
+                updated_at: "2026-06-02T00:00:00.000Z",
+                size: 24,
+                isSecure: false,
+              },
+            ],
+          },
+        },
+      ]),
+      fetchFilesByShard: vi.fn().mockResolvedValue([
+        {
+          gistId: "shard-gist-1",
+          files: {
+            "file-1.yaml": {
+              content: "remote-content",
+              updated_at: "2026-06-02T00:00:00.000Z",
+            },
+          },
+        },
+      ]),
+    };
+
+    const localFile = new NexusFile(
+      "file-1",
+      "File 1",
+      "local-content",
+      "yaml",
+      [],
+      "2026-06-01T00:00:00.000Z",
+      true,
+      "local-checksum",
+      "2026-06-01T00:00:00.000Z",
+      false,
+    );
+    fileRepo.get.mockResolvedValue(localFile);
+
+    const service = new ShardPullService({
+      gistRepo: gistRepo as any,
+      fileRepo: fileRepo as any,
+      cryptoProvider: cryptoProvider as any,
+      shardFetchPlanner: shardFetchPlanner as any,
+      now: () => "2026-06-02T00:00:00.000Z",
+    });
+
+    await service.pull({
+      remoteIndex: createIndex(),
+      changedShardGists: null,
+    });
+
+    expect(fileRepo.saveBulk).toHaveBeenCalledTimes(1);
+    const [savedFiles] = fileRepo.saveBulk.mock.calls[0];
+    expect(savedFiles).toHaveLength(2);
+    expect(savedFiles[0]).toMatchObject({
+      id: "file-1",
+      content: "remote-content",
+      isDirty: false,
+    });
+    expect(savedFiles[1]).toMatchObject({
+      title: "File 1 (Conflict)",
+      content: "local-content",
+      isDirty: true,
+    });
+  });
+});
+

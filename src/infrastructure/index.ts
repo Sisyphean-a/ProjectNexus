@@ -1,9 +1,5 @@
-import { GistRepository } from './github/GistRepository'
-import { LocalStoreRepository } from './storage/LocalStore'
-
-export const gistRepository = new GistRepository()
-export const localStoreRepository = new LocalStoreRepository()
-export { nexusDb } from './db/NexusDatabase'
-import { LocalFileRepository } from './db/LocalFileRepository'
-export const fileRepository = new LocalFileRepository()
-export { localHistoryRepository } from './storage/LocalHistoryRepository'
+export { GistRepository } from "./github/GistRepository";
+export { LocalStoreRepository } from "./storage/LocalStore";
+export { LocalFileRepository } from "./db/LocalFileRepository";
+export { LocalHistoryRepository } from "./storage/LocalHistoryRepository";
+export { nexusDb } from "./db/NexusDatabase";

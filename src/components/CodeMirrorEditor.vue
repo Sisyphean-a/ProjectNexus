@@ -39,6 +39,11 @@ const customKeymap = keymap.of([
 const languageExtension = shallowRef<Extension>([]);
 let languageRequestId = 0;
 
+const model = computed({
+  get: () => props.modelValue,
+  set: (value: string) => emit("update:modelValue", value),
+});
+
 watch(
   () => props.language,
   async (language) => {
@@ -83,7 +88,6 @@ const editorStyle = computed(() => ({
 }));
 
 function handleChange(val: string) {
-  emit('update:modelValue', val);
   emit('change', val);
 }
 </script>
@@ -91,7 +95,7 @@ function handleChange(val: string) {
 <template>
   <div class="codemirror-container" :style="editorStyle">
     <Codemirror
-      v-model="props.modelValue"
+      v-model="model"
       :extensions="extensions"
       :autofocus="true"
       :indent-with-tab="true"
@@ -116,3 +120,4 @@ function handleChange(val: string) {
   font-family: 'Fira Code', Consolas, monospace;
 }
 </style>
+

@@ -3,6 +3,7 @@ import { WebCryptoProvider } from "../WebCryptoProvider";
 
 const SESSION_PASSWORD_KEY = "nexus_vault_password_session";
 const LEGACY_LOCAL_PASSWORD_KEY = "nexus_vault_password";
+const TRUSTED_PASSWORD_ENVELOPE_KEY = "nexus_vault_password_trusted_envelope";
 
 describe("WebCryptoProvider", () => {
   beforeEach(() => {
@@ -21,7 +22,7 @@ describe("WebCryptoProvider", () => {
 
   it("可选择在当前会话中记住密码", async () => {
     const provider = new WebCryptoProvider();
-    await provider.setPassword("vault-pass", { rememberInSession: true });
+    await provider.setPassword("vault-pass", { rememberMode: "session" });
 
     expect(window.sessionStorage.getItem(SESSION_PASSWORD_KEY)).toBe(
       "vault-pass",
@@ -30,7 +31,7 @@ describe("WebCryptoProvider", () => {
 
   it("clearPassword 会清除内存密钥与会话缓存", async () => {
     const provider = new WebCryptoProvider();
-    await provider.setPassword("vault-pass", { rememberInSession: true });
+    await provider.setPassword("vault-pass", { rememberMode: "session" });
 
     provider.clearPassword();
 
@@ -42,6 +43,15 @@ describe("WebCryptoProvider", () => {
     window.localStorage.setItem(LEGACY_LOCAL_PASSWORD_KEY, "legacy-pass");
     new WebCryptoProvider();
     expect(window.localStorage.getItem(LEGACY_LOCAL_PASSWORD_KEY)).toBeNull();
+  });
+
+  it("trustedDevice 模式会持久化加密封装", async () => {
+    const provider = new WebCryptoProvider();
+    await provider.setPassword("vault-pass", { rememberMode: "trustedDevice" });
+
+    const envelope = window.localStorage.getItem(TRUSTED_PASSWORD_ENVELOPE_KEY);
+    expect(envelope).toBeTruthy();
+    expect(envelope).not.toContain("vault-pass");
   });
 
   it("未设置密码时 hasPassword 为 false", () => {

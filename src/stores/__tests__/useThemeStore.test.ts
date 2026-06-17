@@ -8,8 +8,10 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("../../infrastructure", () => ({
-  localStoreRepository: mocks.localStoreRepository,
+vi.mock("../../bootstrap/container", () => ({
+  appContainer: {
+    localStoreRepository: mocks.localStoreRepository,
+  },
 }));
 
 import { useThemeStore } from "../useThemeStore";

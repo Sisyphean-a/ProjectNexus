@@ -19,7 +19,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "repair:shards": "esno scripts/repair_shards.ts"
+    "repair:shards": "esno scripts/repair_shards.ts",
+    "lint": "eslint src --max-warnings=0"
   },
   "devDependencies": {
     "@antfu/eslint-config": "^2.27.0",
