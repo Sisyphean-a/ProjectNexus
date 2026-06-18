@@ -143,7 +143,11 @@ export class ShardPullService {
       this.hydrateStorage(indexed.item, shard, manifestItem.filename);
 
       const localFile = await this.deps.fileRepo.get(indexed.item.id);
-      if (localFile && localFile.checksum === manifestItem.checksum) {
+      if (
+        localFile
+        && localFile.checksum === manifestItem.checksum
+        && this.sizeMatches(localFile.content, manifestItem.size)
+      ) {
         continue;
       }
 
@@ -170,6 +174,19 @@ export class ShardPullService {
     };
     item.gist_file = filename;
   }
+
+  /**
+   * 校验和相等时的二次防御：若 manifest 记录了 size 且与本地内容字节数不一致，
+   * 视为内容已变更（拦住校验和碰撞导致的静默跳过）。manifest 无 size（旧数据）
+   * 时保持宽松，避免无谓重拉。
+   */
+  private sizeMatches(localContent: string, manifestSize: number | undefined): boolean {
+    if (manifestSize === undefined || manifestSize === null) {
+      return true;
+    }
+    return new TextEncoder().encode(localContent).length === manifestSize;
+  }
+
 
   private async pullLegacyShardFiles(
     shardsToSync: readonly ShardDescriptor[],
