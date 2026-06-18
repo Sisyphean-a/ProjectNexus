@@ -64,7 +64,11 @@ export class WorkspaceFacade {
     return { ...(context.config ?? (await this.localStore.getConfig())), ...updates };
   }
 
-  async initializeGist(): Promise<{ config: NexusConfig; index: NexusIndex }> {
+  async initializeGist(): Promise<{
+    config: NexusConfig;
+    index: NexusIndex;
+    remoteUpdatedAt: string | null;
+  }> {
     const config = await this.localStore.getConfig();
     const index: NexusIndex = {
       version: 2,
@@ -80,19 +84,19 @@ export class WorkspaceFacade {
       ],
       shards: [],
     };
-    const gistId = await this.syncService.initializeNexus(index);
+    const { gistId, updatedAt } = await this.syncService.initializeNexus(index);
+    const configUpdates: Partial<NexusConfig> = {
+      gistId,
+      rootGistId: gistId,
+      schemaVersion: 3,
+      lastRemoteUpdatedAt: updatedAt,
+    };
     const nextConfig = {
       ...config,
-      gistId,
-      rootGistId: gistId,
-      schemaVersion: 3,
+      ...configUpdates,
     };
-    await this.localStore.saveConfig({
-      gistId,
-      rootGistId: gistId,
-      schemaVersion: 3,
-    });
-    return { config: nextConfig, index };
+    await this.localStore.saveConfig(configUpdates);
+    return { config: nextConfig, index, remoteUpdatedAt: updatedAt };
   }
 
   async addCategory(

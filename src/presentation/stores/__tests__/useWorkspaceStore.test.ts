@@ -118,6 +118,21 @@ describe("useWorkspaceStore", () => {
     expect(workspaceStore.remoteUpdatedAt).toBe("2026-02-01T00:00:00.000Z");
   });
 
+  it("initializeGist 会用初始化返回的 remoteUpdatedAt 设置冲突基线", async () => {
+    mocks.workspaceFacade.initializeGist.mockResolvedValue({
+      config: createConfig({ rootGistId: "root-1" }),
+      index: createIndex({ categories: [createCategory({ id: "default", items: [] })] }),
+      remoteUpdatedAt: "2026-04-01T00:00:00.000Z",
+    });
+
+    const workspaceStore = useWorkspaceStore();
+
+    await workspaceStore.initializeGist();
+
+    // 关键：首写前 remoteUpdatedAt 已对齐远端，避免 ConflictGuard 误判（Finding 01）
+    expect(workspaceStore.remoteUpdatedAt).toBe("2026-04-01T00:00:00.000Z");
+  });
+
   it("currentCategory 和 currentFileList 基于 selection store 计算", async () => {
     const workspaceStore = useWorkspaceStore();
     const selectionStore = useSelectionStore();

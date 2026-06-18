@@ -63,6 +63,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       const result = await appContainer.workspaceFacade.initializeGist();
       workspaceConfig.value = result.config;
       workspaceIndex.value = result.index;
+      remoteUpdatedAt.value = result.remoteUpdatedAt;
       selectedCategoryId.value = "default";
       selectedFileId.value = null;
     } finally {

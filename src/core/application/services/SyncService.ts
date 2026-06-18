@@ -116,11 +116,24 @@ export class SyncService {
     });
   }
 
-  async initializeNexus(initialIndex: NexusIndex): Promise<string> {
+  async initializeNexus(
+    initialIndex: NexusIndex,
+  ): Promise<{ gistId: string; updatedAt: string | null }> {
     const normalized = this.ensureV2Index(initialIndex);
     const gistId = await this.gistRepo.createNexusGist(normalized);
     await this.localStore.saveIndex(normalized);
-    return gistId;
+
+    // 读取刚创建 Gist 的 updated_at，作为冲突检测基线，
+    // 避免新用户首次写入被 ConflictGuard 误判为冲突（见 audit Finding 01）。
+    let updatedAt: string | null = null;
+    try {
+      const meta = await this.gistRepo.fetchGist(gistId);
+      updatedAt = (meta as { updated_at?: string })?.updated_at ?? null;
+    } catch (error) {
+      console.warn("[SyncService] 初始化后获取 Gist updated_at 失败", error);
+    }
+
+    return { gistId, updatedAt };
   }
 
   async syncDown(

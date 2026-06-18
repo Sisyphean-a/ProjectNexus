@@ -76,18 +76,36 @@ describe("SyncService", () => {
   it("initializeNexus 会升级为 v2 并保存本地索引", async () => {
     const { gistRepo, localStore, service } = createDeps();
     gistRepo.createNexusGist.mockResolvedValue("root-1");
+    gistRepo.fetchGist.mockResolvedValue({ updated_at: "2026-01-02T00:00:00.000Z" });
     const index: NexusIndex = {
       version: 1,
       updated_at: "2026-01-01T00:00:00.000Z",
       categories: [createCategory({ id: "cat-a", items: [] })],
     };
 
-    const gistId = await service.initializeNexus(index);
+    const result = await service.initializeNexus(index);
 
-    expect(gistId).toBe("root-1");
+    expect(result.gistId).toBe("root-1");
+    expect(result.updatedAt).toBe("2026-01-02T00:00:00.000Z");
     expect(index.version).toBe(2);
     expect(index.shards).toEqual([]);
     expect(localStore.saveIndex).toHaveBeenCalledWith(index);
+  });
+
+  it("initializeNexus 在获取 updated_at 失败时降级为 null 但不抛错", async () => {
+    const { gistRepo, service } = createDeps();
+    gistRepo.createNexusGist.mockResolvedValue("root-2");
+    gistRepo.fetchGist.mockRejectedValue(new Error("network"));
+    const index: NexusIndex = {
+      version: 2,
+      updated_at: "2026-01-01T00:00:00.000Z",
+      categories: [createCategory({ id: "cat-a", items: [] })],
+    };
+
+    const result = await service.initializeNexus(index);
+
+    expect(result.gistId).toBe("root-2");
+    expect(result.updatedAt).toBeNull();
   });
 
   it("syncDown 在未找到 root gist 时抛错", async () => {
